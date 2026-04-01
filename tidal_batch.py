@@ -8,12 +8,12 @@ import numpy as np
 
 from core import (
     clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics,
-    predict_from_harmonics, build_netcdf_dataset,
+    predict_from_harmonics, build_datums_only_dataset, build_netcdf_dataset,
     save_netcdf, fetch_fd_hourly, fetch_rq_hourly, get_rq_metadata_span
 )
 
 
-def process_df(df, station_id, station_name, station_kind, latitude, output_dir, end_hourly_fd='2100-12-31 23:00:00', include_fd_minute_highlow=False):
+def process_df(df, station_id, station_name, station_kind, latitude, output_dir, end_hourly_fd='2100-12-31 23:00:00', include_fd_minute_highlow=False, datums_only=False):
     outdir = Path(output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
     df = clean_hourly_dataframe(df)
@@ -29,6 +29,8 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
     for ep in epochs:
         sub = df[(df['time'] >= ep.start) & (df['time'] <= ep.end)].copy()
         datum_by_epoch[ep.name] = compute_datums(sub)
+        if datums_only:
+            continue
         harmonics_by_epoch[ep.name] = fit_harmonics(sub, latitude=latitude)
         pred_end = pd.Timestamp(end_hourly_fd) if station_kind == 'FD' else ep.end
         hourly_predictions[ep.name] = predict_from_harmonics(harmonics_by_epoch[ep.name], ep.start, pred_end, freq='1h')
@@ -37,7 +39,10 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
             if ep.end <= minute_end:
                 pass
 
-    ds = build_netcdf_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch, harmonics_by_epoch, hourly_predictions)
+    if datums_only:
+        ds = build_datums_only_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch)
+    else:
+        ds = build_netcdf_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch, harmonics_by_epoch, hourly_predictions)
     for ep_name, hl in minute_highlow_by_epoch.items():
         if not hl.empty:
             ds[f'fd_highlow_time_{ep_name}'] = ([f'fd_hl_{ep_name}'], hl['time'].to_numpy(dtype='datetime64[ns]'))
@@ -61,19 +66,20 @@ def main():
     parser.add_argument('--start')
     parser.add_argument('--end')
     parser.add_argument('--output-dir', required=True)
+    parser.add_argument('--datums-only', action='store_true')
     args = parser.parse_args()
 
     if args.mode == 'csv':
         if not args.input_csv:
             raise SystemExit('--input-csv is required for csv mode')
         df = pd.read_csv(args.input_csv)
-        result = process_df(df, args.station_id, args.station_name, args.station_kind, args.latitude, args.output_dir)
+        result = process_df(df, args.station_id, args.station_name, args.station_kind, args.latitude, args.output_dir, datums_only=args.datums_only)
     elif args.mode == 'fd':
         start = args.start or '1800-01-01'
         end = args.end or '2100-12-31'
         df = fetch_fd_hourly(args.station_id, start, end)
         station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else args.station_name
-        result = process_df(df[['time','sea_level']], args.station_id, station_name, 'FD', args.latitude, args.output_dir)
+        result = process_df(df[['time','sea_level']], args.station_id, station_name, 'FD', args.latitude, args.output_dir, datums_only=args.datums_only)
     else:
         if not args.version:
             raise SystemExit('--version is required for rq mode')
@@ -85,7 +91,7 @@ def main():
             df = fetch_rq_hourly(args.station_id, args.version)
         station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else args.station_name
         station_record = f"{args.station_id}{args.version.lower()}"
-        result = process_df(df[['time','sea_level']], station_record, station_name, 'RQ', args.latitude, args.output_dir)
+        result = process_df(df[['time','sea_level']], station_record, station_name, 'RQ', args.latitude, args.output_dir, datums_only=args.datums_only)
 
     print(json.dumps(result))
 

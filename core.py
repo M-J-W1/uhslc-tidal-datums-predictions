@@ -345,6 +345,32 @@ def _round_mm_array(values):
     return arr
 
 
+def build_datums_only_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult]) -> xr.Dataset:
+    ds = xr.Dataset(coords={'epoch': [e.name for e in epochs]})
+    ds.attrs['station_id'] = station_id
+    ds.attrs['station_name'] = station_name
+    ds.attrs['station_kind'] = station_kind
+    ds.attrs['reference_frame'] = 'Station Zero'
+    ds.attrs['time_zone'] = 'GMT'
+    ds.attrs['units'] = 'mm integer'
+    ds.attrs['content'] = 'datums_only'
+
+    for field in DatumResult.__dataclass_fields__.keys():
+        if field == 'tide_type':
+            ds[field] = xr.DataArray(np.array([datum_by_epoch[e.name].tide_type for e in epochs], dtype=object), dims=['epoch'])
+        else:
+            vals = [round(getattr(datum_by_epoch[e.name], field)) for e in epochs]
+            ds[field] = xr.DataArray(np.array(vals, dtype=np.int32), dims=['epoch'])
+
+    ds['epoch_start'] = xr.DataArray(np.array([np.datetime64(e.start, 'ns') for e in epochs]), dims=['epoch'])
+    ds['epoch_end'] = xr.DataArray(np.array([np.datetime64(e.end, 'ns') for e in epochs]), dims=['epoch'])
+    ds['epoch_completion_fraction'] = xr.DataArray(np.array([e.completion_fraction for e in epochs], dtype=float), dims=['epoch'])
+    ds['epoch_source'] = xr.DataArray(np.array([e.source for e in epochs], dtype=object), dims=['epoch'])
+    ds['epoch_n_expected'] = xr.DataArray(np.array([e.n_expected for e in epochs], dtype=np.int32), dims=['epoch'])
+    ds['epoch_n_valid'] = xr.DataArray(np.array([e.n_valid for e in epochs], dtype=np.int32), dims=['epoch'])
+    return ds
+
+
 def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], harmonics_by_epoch: Dict[str, HarmonicResult], hourly_predictions: Dict[str, pd.DataFrame]) -> xr.Dataset:
     epoch_names = [e.name for e in epochs]
     max_const = max((len(harmonics_by_epoch[e].constituent for e in epoch_names)), default=0) if False else max((len(harmonics_by_epoch[e].constituent) for e in epoch_names), default=0)

@@ -8,7 +8,7 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, predict_from_harmonics, extract_daily_high_low, extract_daily_high_low_chunked, build_netcdf_dataset, save_netcdf
+from core import clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, predict_from_harmonics, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_netcdf
 
 
 class TestTidalCore(unittest.TestCase):
@@ -81,6 +81,20 @@ class TestTidalCore(unittest.TestCase):
             reopened = xr.open_dataset(path)
             self.assertEqual(reopened.attrs['station_id'], '001')
             reopened.close()
+
+    def test_datums_only_netcdf_write(self):
+        df = self.synthetic_hourly()
+        epochs = select_epochs(df)
+        ep = epochs[0]
+        dat = compute_datums(df)
+        ds = build_datums_only_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat})
+        self.assertEqual(ds.attrs['content'], 'datums_only')
+        self.assertEqual(str(ds['MHHW'].dtype), 'int32')
+        self.assertNotIn('harmonic_constituent', ds.variables)
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'test_datums_only.nc'
+            save_netcdf(ds, str(path))
+            self.assertTrue(path.exists())
 
 
 if __name__ == '__main__':
