@@ -29,10 +29,10 @@ from core import (
     save_netcdf,
     select_epochs,
     strip_harmonic_result,
+    get_station_metadata,
 )
 
 
-LATITUDE_007 = 7.33
 OUTPUT_ROOT = Path("artifacts/station007_full_test")
 
 
@@ -128,6 +128,8 @@ def _run_record(
     outdir: Path,
     version: str | None = None,
 ) -> dict:
+    station_meta = get_station_metadata(station_id)
+    latitude = station_meta.latitude
     if station_kind == "FD":
         raw = fetch_fd_hourly(station_id)
         record_id = station_id
@@ -153,7 +155,7 @@ def _run_record(
 
     for ep in epochs:
         sub = df[(df["time"] >= ep.start) & (df["time"] <= ep.end)].copy()
-        fitted_harmonics = fit_harmonics(sub, latitude=LATITUDE_007)
+        fitted_harmonics = fit_harmonics(sub, latitude=latitude)
         harmonic_path = outdir / "harmonics" / record_id / f"{ep.name}_harmonics.pkl"
         harmonic_artifacts[ep.name] = save_harmonic_result(
             fitted_harmonics,
@@ -165,7 +167,7 @@ def _run_record(
                 "epoch_name": ep.name,
                 "epoch_start": str(ep.start),
                 "epoch_end": str(ep.end),
-                "latitude": float(LATITUDE_007),
+                "latitude": float(latitude),
             },
         )
         harmonics_summary = strip_harmonic_result(fitted_harmonics)

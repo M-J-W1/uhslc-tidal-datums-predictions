@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -8,16 +9,45 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, load_harmonic_result, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result, save_netcdf, strip_harmonic_result
+from core import cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums, fetch_station_metadata_index, fit_harmonics, get_rq_metadata_span, get_station_metadata, list_rq_versions, load_harmonic_result, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result, save_netcdf, strip_harmonic_result
 
 
 class TestTidalCore(unittest.TestCase):
+    @staticmethod
+    def sample_meta_payload():
+        return {
+            'type': 'FeatureCollection',
+            'features': [
+                {
+                    'type': 'Feature',
+                    'geometry': {'type': 'Point', 'coordinates': [134.463, 7.33]},
+                    'properties': {
+                        'uhslc_id': 7,
+                        'name': 'Malakal',
+                        'country': 'Palau',
+                        'fd_span': {'oldest': '1969-05-19', 'latest': '2026-02-28'},
+                        'rq_span': {'oldest': '1926-01-01', 'latest': '2018-12-31'},
+                        'rq_versions': {
+                            'a': {'begin': '1926-01-01', 'end': '1939-12-10'},
+                            'b': {'begin': '1983-01-01', 'end': '2018-12-31'},
+                        },
+                    },
+                }
+            ],
+        }
+
     @staticmethod
     def synthetic_hourly(start='2002-01-01 00:00:00', end='2002-08-31 23:00:00'):
         time = pd.date_range(start, end, freq='1h')
         hours = np.arange(len(time), dtype=float)
         sea = 1000*np.sin(2*np.pi*hours/12.42) + 250*np.sin(2*np.pi*hours/24.0) + 10*np.random.default_rng(42).normal(size=len(time))
         return pd.DataFrame({'time': time, 'sea_level': sea})
+
+    def setUp(self):
+        fetch_station_metadata_index.cache_clear()
+
+    def tearDown(self):
+        fetch_station_metadata_index.cache_clear()
 
     def test_clean_dataframe(self):
         df = pd.DataFrame({'time': ['2002-01-01 00:00:00','2002-01-01 00:00:00','2002-01-01 01:00:00'], 'sea_level': [1, -32767, 3]})
@@ -73,6 +103,19 @@ class TestTidalCore(unittest.TestCase):
     def test_cap_prediction_end(self):
         self.assertEqual(cap_prediction_end(pd.Timestamp('2030-01-01 00:00:00')), pd.Timestamp('2030-01-01 00:00:00'))
         self.assertEqual(cap_prediction_end(pd.Timestamp('2100-12-31 23:00:00')), pd.Timestamp('2035-12-31 23:00:00'))
+
+    @patch('core._load_json_url')
+    def test_station_metadata_from_live_geojson(self, mock_load_json_url):
+        mock_load_json_url.return_value = self.sample_meta_payload()
+        meta = get_station_metadata('007')
+        self.assertEqual(meta.station_id, '007')
+        self.assertEqual(meta.name, 'Malakal')
+        self.assertAlmostEqual(meta.latitude, 7.33)
+        self.assertAlmostEqual(meta.longitude, 134.463)
+        self.assertEqual(list_rq_versions(['007'])['007'], ['A', 'B'])
+        start, end = get_rq_metadata_span('007', 'b')
+        self.assertEqual(start, pd.Timestamp('1983-01-01 00:00:00'))
+        self.assertEqual(end, pd.Timestamp('2018-12-31 00:00:00'))
 
     def test_extract_daily_high_low(self):
         time = pd.date_range('2023-01-01 00:00:00', '2023-01-03 23:59:00', freq='1min')

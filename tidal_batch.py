@@ -13,6 +13,7 @@ from core import (
     predict_fd_high_low,
     build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result,
     save_netcdf, strip_harmonic_result, fetch_fd_hourly, fetch_rq_hourly,
+    get_station_metadata,
     get_rq_metadata_span
 )
 
@@ -97,10 +98,10 @@ def main():
     parser.add_argument('--mode', choices=['csv','fd','rq'], default='csv')
     parser.add_argument('--input-csv')
     parser.add_argument('--station-id', required=True)
-    parser.add_argument('--station-name', default='Unknown Station')
+    parser.add_argument('--station-name', default=None)
     parser.add_argument('--station-kind', choices=['FD','RQ'], default='FD')
     parser.add_argument('--version', help='RQ version letter, e.g. A')
-    parser.add_argument('--latitude', type=float, required=True)
+    parser.add_argument('--latitude', type=float)
     parser.add_argument('--start')
     parser.add_argument('--end')
     parser.add_argument('--output-dir', required=True)
@@ -111,13 +112,23 @@ def main():
         if not args.input_csv:
             raise SystemExit('--input-csv is required for csv mode')
         df = pd.read_csv(args.input_csv)
-        result = process_df(df, args.station_id, args.station_name, args.station_kind, args.latitude, args.output_dir, datums_only=args.datums_only)
+        try:
+            meta = get_station_metadata(args.station_id)
+        except KeyError:
+            meta = None
+        station_name = args.station_name or (meta.name if meta is not None else 'Unknown Station')
+        latitude = args.latitude if args.latitude is not None else (meta.latitude if meta is not None else None)
+        if latitude is None:
+            raise SystemExit('--latitude is required when station metadata is unavailable')
+        result = process_df(df, args.station_id, station_name, args.station_kind, latitude, args.output_dir, datums_only=args.datums_only)
     elif args.mode == 'fd':
         start = args.start or '1800-01-01'
         end = args.end or '2035-12-31'
         df = fetch_fd_hourly(args.station_id, start, end)
-        station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else args.station_name
-        result = process_df(df[['time','sea_level']], args.station_id, station_name, 'FD', args.latitude, args.output_dir, datums_only=args.datums_only)
+        meta = get_station_metadata(args.station_id)
+        station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else (args.station_name or meta.name)
+        latitude = args.latitude if args.latitude is not None else meta.latitude
+        result = process_df(df[['time','sea_level']], args.station_id, station_name, 'FD', latitude, args.output_dir, datums_only=args.datums_only)
     else:
         if not args.version:
             raise SystemExit('--version is required for rq mode')
@@ -127,9 +138,11 @@ def main():
             df = fetch_rq_hourly(args.station_id, args.version, start, end)
         else:
             df = fetch_rq_hourly(args.station_id, args.version)
-        station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else args.station_name
+        meta = get_station_metadata(args.station_id)
+        station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else (args.station_name or meta.name)
+        latitude = args.latitude if args.latitude is not None else meta.latitude
         station_record = f"{args.station_id}{args.version.lower()}"
-        result = process_df(df[['time','sea_level']], station_record, station_name, 'RQ', args.latitude, args.output_dir, datums_only=args.datums_only)
+        result = process_df(df[['time','sea_level']], station_record, station_name, 'RQ', latitude, args.output_dir, datums_only=args.datums_only)
 
     print(json.dumps(result))
 

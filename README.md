@@ -17,9 +17,6 @@ It is prepared for handoff into another repository or another computer.
 - `tidal_batch.py` — command-line driver
 - `tests/test_core_unittest.py` — unit tests using `unittest`
 
-### Local support / driver data
-- `data/fd_metadata.geojson` — copied from the local IDEA environment because it may not be conveniently available in the target repo/environment
-
 ### Documentation
 - `docs/HumanPreparedInstructions_TidalDatumsPredictions.md` — Markdown transcription of the human-authored instruction document
 - `docs/instructions_extracted.txt` — raw extracted text from the original instruction document
@@ -39,12 +36,11 @@ This prototype was developed in Python 3.11 and used:
 - `utide`
 - `requests`
 - `PyYAML`
-- `beautifulsoup4`
 
 Suggested install example:
 
 ```bash
-pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml beautifulsoup4
+pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml
 ```
 
 ## Current Functional Status
@@ -60,14 +56,14 @@ pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml b
 
 ### Known limitations
 - Full-record end-to-end processing for FD `001` was killed by the OS (`return code -9`), likely due to resource pressure in the current implementation.
-- RQ availability through ERDDAP appears inconsistent for station `001`; ERDDAP exposed `001C` but not `001A` or `001B`, even though the YAML metadata index lists those versions.
+- RQ availability through ERDDAP appears inconsistent for station `001`; live metadata may list versions that are not currently exposed by ERDDAP.
 - The harmonic implementation now matches the core legacy UTide setup more closely, but it is still not a full legacy-equivalent production workflow.
 - The current code should still be monitored for memory pressure during long UTide solves, even though prediction generation now uses persisted harmonic artifacts and chunked FD minute extraction.
 
 ## Recommended Next Refactors
 1. **Process full records lazily/in chunks** instead of building very large in-memory arrays.
 2. **Continue reducing solve-time memory pressure** during epoch harmonic fitting, which remains the main peak-memory step.
-3. **Refine RQ mapping** to reconcile ERDDAP exposure vs YAML metadata records.
+3. **Refine RQ mapping** to reconcile ERDDAP exposure vs live metadata records.
 4. **Expand harmonic constituents** and align more closely with legacy software behavior.
 5. **Add integration tests** for real ERDDAP station runs.
 
@@ -85,19 +81,20 @@ RUN_LIVE_UHSLC=1 MPLCONFIGDIR=/tmp/mplconfig python3 -m unittest tests.test_live
 
 ### FD example
 ```bash
-python tidal_batch.py   --mode fd   --station-id 001   --station-name Pohnpei   --station-kind FD   --latitude 6.9833   --output-dir outputs
+python tidal_batch.py --mode fd --station-id 001 --station-kind FD --output-dir outputs
 ```
 
 ### RQ example
 ```bash
-python tidal_batch.py   --mode rq   --station-id 002   --station-name "Tarawa, Bairiki"   --station-kind RQ   --version A   --latitude 1.33   --output-dir outputs
+python tidal_batch.py --mode rq --station-id 002 --station-kind RQ --version A --output-dir outputs
 ```
 
 ## Important Notes for the Handoff Repo
-- `fd_metadata.geojson` is included locally in `data/` because it is a key support file.
 - The current code relies on direct ERDDAP access to:
   - `global_hourly_fast`
   - `global_hourly_rqds`
+- Station inventory, names, coordinates, and RQ version metadata can be loaded from:
+  - `https://uhslc.soest.hawaii.edu/data/meta.geojson`
 - If the receiving environment has stricter memory limits, full-record runs may need chunking immediately.
 - The legacy Matlab instructions use UTide with epoch-wide solves, nodal corrections enabled, annual constituents enabled, and trend removed only at prediction time. The Python implementation now follows that same pattern.
 - To reduce long-epoch memory and CPU pressure, the harmonic solve now follows the legacy Matlab `opt = 'nostats'` approach rather than computing UTide confidence intervals.

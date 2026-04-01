@@ -13,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import clean_hourly_dataframe, compute_datums, fetch_fd_hourly, fetch_rq_hourly, fit_harmonics, load_harmonic_result, predict_from_harmonics, save_harmonic_result, select_epochs
+from core import clean_hourly_dataframe, compute_datums, fetch_fd_hourly, fetch_rq_hourly, fit_harmonics, get_station_metadata, load_harmonic_result, predict_from_harmonics, save_harmonic_result, select_epochs
 
 
 OUTPUT_ROOT = Path("artifacts/station007_datum_test")
@@ -50,6 +50,8 @@ def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> No
 
 
 def _run_record(station_id: str, station_kind: str, version: str | None = None) -> dict:
+    station_meta = get_station_metadata(station_id)
+    latitude = station_meta.latitude
     if station_kind == "FD":
         raw = fetch_fd_hourly(station_id)
         record_id = station_id
@@ -71,7 +73,7 @@ def _run_record(station_id: str, station_kind: str, version: str | None = None) 
     for ep in epochs:
         sub = df[(df["time"] >= ep.start) & (df["time"] <= ep.end)].copy()
         harmonic_path = OUTPUT_ROOT / "harmonics" / record_id / f"{ep.name}_harmonics.pkl"
-        fitted_harmonics = fit_harmonics(sub, latitude=7.33)
+        fitted_harmonics = fit_harmonics(sub, latitude=latitude)
         harmonic_artifact = save_harmonic_result(
             fitted_harmonics,
             str(harmonic_path),
@@ -82,7 +84,7 @@ def _run_record(station_id: str, station_kind: str, version: str | None = None) 
                 "epoch_name": ep.name,
                 "epoch_start": str(ep.start),
                 "epoch_end": str(ep.end),
-                "latitude": 7.33,
+                "latitude": float(latitude),
             },
         )
         del fitted_harmonics

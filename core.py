@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 import io
@@ -15,12 +16,12 @@ import pandas as pd
 import xarray as xr
 import requests
 import yaml
-from bs4 import BeautifulSoup
 from scipy.signal import find_peaks
 from utide import solve, reconstruct
 
 MISSING_VALUE = -32767
 ERDDAP_BASE = 'https://uhslc.soest.hawaii.edu/erddap/tabledap'
+META_GEOJSON_URL = 'https://uhslc.soest.hawaii.edu/data/meta.geojson'
 RQ_META_INDEX = 'https://uhslc.soest.hawaii.edu/rqds/metadata_yaml/'
 PRIMARY_EPOCHS = [
     ("NTDE_1983-2001", pd.Timestamp("1983-01-01 00:00:00"), pd.Timestamp("2001-12-31 23:00:00")),
@@ -74,6 +75,18 @@ class DatumResult:
     p99_high: float
 
 
+@dataclass(frozen=True)
+class StationMetadata:
+    station_id: str
+    name: str
+    country: str | None
+    latitude: float
+    longitude: float
+    fd_span: dict | None
+    rq_span: dict | None
+    rq_versions: dict
+
+
 def cap_prediction_end(end: pd.Timestamp) -> pd.Timestamp:
     return min(pd.Timestamp(end), MAX_PREDICTION_END)
 
@@ -122,6 +135,57 @@ def load_erddap_csv(url: str) -> pd.DataFrame:
     if last_error is not None:
         raise last_error
     raise RuntimeError('Unexpected ERDDAP load failure.')
+
+
+def _load_json_url(url: str, timeout: int = 240) -> dict:
+    last_error = None
+    for attempt in range(4):
+        try:
+            r = requests.get(url, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(2 * (attempt + 1))
+                continue
+            break
+    raise RuntimeError(f'Failed to load JSON from {url}') from last_error
+
+
+@lru_cache(maxsize=1)
+def fetch_station_metadata_index() -> dict[str, StationMetadata]:
+    payload = _load_json_url(META_GEOJSON_URL, timeout=120)
+    out: dict[str, StationMetadata] = {}
+    for feature in payload.get('features', []):
+        props = feature.get('properties', {}) or {}
+        coords = (feature.get('geometry') or {}).get('coordinates') or [None, None]
+        station_id = props.get('uhslc_id')
+        name = props.get('name')
+        lat = coords[1] if len(coords) > 1 else None
+        lon = coords[0] if len(coords) > 0 else None
+        if station_id is None or name is None or lat is None or lon is None:
+            continue
+        rq_versions = props.get('rq_versions') or {}
+        out[str(int(station_id)).zfill(3)] = StationMetadata(
+            station_id=str(int(station_id)).zfill(3),
+            name=str(name),
+            country=props.get('country'),
+            latitude=float(lat),
+            longitude=float(lon),
+            fd_span=props.get('fd_span'),
+            rq_span=props.get('rq_span'),
+            rq_versions=dict(rq_versions),
+        )
+    return out
+
+
+def get_station_metadata(station_id: str) -> StationMetadata:
+    sid = str(int(station_id)).zfill(3)
+    meta = fetch_station_metadata_index().get(sid)
+    if meta is None:
+        raise KeyError(f'No metadata found for UHSLC station {sid}')
+    return meta
 
 
 def clean_hourly_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -553,23 +617,31 @@ def fetch_rq_hourly(station_id: str, version: str, start: str | None = None, end
 
 
 def list_rq_versions(station_ids: list[str]) -> dict:
-    r = requests.get(RQ_META_INDEX, timeout=60)
-    if not r.ok:
-        raise RuntimeError(f'Failed metadata index: {r.status_code}')
-    soup = BeautifulSoup(r.text, 'html.parser')
-    links = [a.get('href') for a in soup.find_all('a') if a.get('href')]
-    out = {sid: [] for sid in station_ids}
-    for href in links:
-        m = re.match(r'^(\d{3})([A-Z])meta\.yaml$', href)
-        if m and m.group(1) in out:
-            out[m.group(1)].append(m.group(2).upper())
-    for k in out:
-        out[k] = sorted(set(out[k]))
+    out = {}
+    metadata = fetch_station_metadata_index()
+    for sid in station_ids:
+        key = str(int(sid)).zfill(3)
+        meta = metadata.get(key)
+        versions = []
+        if meta is not None:
+            versions = sorted(v.upper() for v in meta.rq_versions.keys())
+        out[key] = versions
     return out
 
 
 def get_rq_metadata_span(station_id: str, version: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    sid = str(int(station_id)).zfill(3)
     version = str(version).upper()
+    try:
+        meta = get_station_metadata(sid)
+        version_meta = meta.rq_versions.get(version.lower()) or meta.rq_versions.get(version.upper())
+        if version_meta:
+            start = pd.to_datetime(version_meta.get('begin'), utc=True).tz_localize(None)
+            end = pd.to_datetime(version_meta.get('end'), utc=True).tz_localize(None)
+            return start, end
+    except KeyError:
+        pass
+
     url = f"{RQ_META_INDEX}{station_id}{version}meta.yaml"
     r = requests.get(url, timeout=60)
     if not r.ok:

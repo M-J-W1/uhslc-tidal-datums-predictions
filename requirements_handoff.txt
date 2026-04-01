@@ -7,4 +7,3 @@ matplotlib
 utide
 requests
 pyyaml
-beautifulsoup4
