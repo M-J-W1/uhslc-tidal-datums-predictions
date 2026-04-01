@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 import sys
+import gc
 
 import matplotlib
 matplotlib.use("Agg")
@@ -12,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import clean_hourly_dataframe, compute_datums, fetch_fd_hourly, fetch_rq_hourly, select_epochs
+from core import clean_hourly_dataframe, compute_datums, fetch_fd_hourly, fetch_rq_hourly, fit_harmonics, load_harmonic_result, predict_from_harmonics, save_harmonic_result, select_epochs
 
 
 OUTPUT_ROOT = Path("artifacts/station007_datum_test")
@@ -69,16 +70,38 @@ def _run_record(station_id: str, station_kind: str, version: str | None = None) 
 
     for ep in epochs:
         sub = df[(df["time"] >= ep.start) & (df["time"] <= ep.end)].copy()
-        datum = compute_datums(sub)
+        harmonic_path = OUTPUT_ROOT / "harmonics" / record_id / f"{ep.name}_harmonics.pkl"
+        fitted_harmonics = fit_harmonics(sub, latitude=7.33)
+        harmonic_artifact = save_harmonic_result(
+            fitted_harmonics,
+            str(harmonic_path),
+            metadata={
+                "station_id": record_id,
+                "station_name": station_name,
+                "station_kind": station_kind,
+                "epoch_name": ep.name,
+                "epoch_start": str(ep.start),
+                "epoch_end": str(ep.end),
+                "latitude": 7.33,
+            },
+        )
+        del fitted_harmonics
+        gc.collect()
+        harmonics = load_harmonic_result(harmonic_artifact["pickle"])
+        epoch_prediction = predict_from_harmonics(harmonics, ep.start, ep.end, freq="1h")
+        datum = compute_datums(sub, epoch_prediction=epoch_prediction)
         plot_path = plot_dir / f"{ep.name}_datums.png"
         _plot_datums(plot_path, sub, datum, f"{record_id} {ep.name}: tidal datums")
         summaries.append(
             {
                 "epoch": asdict(ep),
                 "datum": asdict(datum),
+                "harmonic_artifact": harmonic_artifact,
                 "plot": str(plot_path),
             }
         )
+        del harmonics, sub, epoch_prediction
+        gc.collect()
 
     return {
         "record_id": record_id,

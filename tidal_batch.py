@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import gc
 from pathlib import Path
 import json
 import pandas as pd
 import numpy as np
 
 from core import (
-    clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics,
-    predict_from_harmonics, build_datums_only_dataset, build_netcdf_dataset,
-    save_netcdf, fetch_fd_hourly, fetch_rq_hourly, get_rq_metadata_span
+    cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums,
+    fit_harmonics, load_harmonic_result, predict_from_harmonics,
+    build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result,
+    save_netcdf, strip_harmonic_result, fetch_fd_hourly, fetch_rq_hourly,
+    get_rq_metadata_span
 )
 
 
@@ -24,20 +27,50 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
     datum_by_epoch = {}
     harmonics_by_epoch = {}
     hourly_predictions = {}
+    harmonic_artifacts = {}
     minute_highlow_by_epoch = {}
+    harmonics_dir = outdir / 'harmonics'
 
     for ep in epochs:
         sub = df[(df['time'] >= ep.start) & (df['time'] <= ep.end)].copy()
-        datum_by_epoch[ep.name] = compute_datums(sub)
+        fitted_harmonics = fit_harmonics(sub, latitude=latitude)
+        harmonic_path = harmonics_dir / f'{station_id}_{ep.name}_harmonics.pkl'
+        harmonic_artifacts[ep.name] = save_harmonic_result(
+            fitted_harmonics,
+            str(harmonic_path),
+            metadata={
+                'station_id': station_id,
+                'station_name': station_name,
+                'station_kind': station_kind,
+                'epoch_name': ep.name,
+                'epoch_start': str(ep.start),
+                'epoch_end': str(ep.end),
+                'latitude': float(latitude),
+            },
+        )
+        harmonics_summary = strip_harmonic_result(fitted_harmonics)
+        del fitted_harmonics
+        gc.collect()
+
+        harmonics = load_harmonic_result(harmonic_artifacts[ep.name]['pickle'])
+        epoch_prediction = predict_from_harmonics(harmonics, ep.start, ep.end, freq='1h')
+        datum_by_epoch[ep.name] = compute_datums(sub, epoch_prediction=epoch_prediction)
         if datums_only:
+            del harmonics, sub, epoch_prediction
+            gc.collect()
             continue
-        harmonics_by_epoch[ep.name] = fit_harmonics(sub, latitude=latitude)
-        pred_end = pd.Timestamp(end_hourly_fd) if station_kind == 'FD' else ep.end
-        hourly_predictions[ep.name] = predict_from_harmonics(harmonics_by_epoch[ep.name], ep.start, pred_end, freq='1h')
+        harmonics_by_epoch[ep.name] = harmonics_summary
+        pred_end = cap_prediction_end(pd.Timestamp(end_hourly_fd) if station_kind == 'FD' else ep.end)
+        if pred_end == ep.end:
+            hourly_predictions[ep.name] = epoch_prediction
+        else:
+            hourly_predictions[ep.name] = predict_from_harmonics(harmonics, ep.start, pred_end, freq='1h')
         if station_kind == 'FD' and include_fd_minute_highlow:
             minute_end = pd.Timestamp('2030-12-31 23:00:00')
             if ep.end <= minute_end:
                 pass
+        del harmonics, sub, epoch_prediction
+        gc.collect()
 
     if datums_only:
         ds = build_datums_only_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch)
@@ -51,7 +84,13 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
 
     outpath = outdir / f'{station_id}.nc'
     save_netcdf(ds, str(outpath))
-    return {'output_netcdf': str(outpath), 'epochs': [e.name for e in epochs], 'station_name': station_name, 'station_kind': station_kind}
+    return {
+        'output_netcdf': str(outpath),
+        'harmonic_artifacts': harmonic_artifacts,
+        'epochs': [e.name for e in epochs],
+        'station_name': station_name,
+        'station_kind': station_kind,
+    }
 
 
 def main():

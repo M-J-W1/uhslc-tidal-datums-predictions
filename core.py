@@ -4,7 +4,11 @@ import copy
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 import io
+import json
+from pathlib import Path
+import pickle
 import re
+import time
 
 import numpy as np
 import pandas as pd
@@ -23,6 +27,7 @@ PRIMARY_EPOCHS = [
     ("NTDE_2002-2020", pd.Timestamp("2002-01-01 00:00:00"), pd.Timestamp("2020-12-31 23:00:00")),
     ("IPCC-AR6_1995-2014", pd.Timestamp("1995-01-01 00:00:00"), pd.Timestamp("2014-12-31 23:00:00")),
 ]
+MAX_PREDICTION_END = pd.Timestamp("2035-12-31 23:00:00")
 
 @dataclass
 class Epoch:
@@ -67,6 +72,10 @@ class DatumResult:
     p99_high: float
 
 
+def cap_prediction_end(end: pd.Timestamp) -> pd.Timestamp:
+    return min(pd.Timestamp(end), MAX_PREDICTION_END)
+
+
 def snap_to_hour(times: pd.Series) -> pd.Series:
     t = pd.to_datetime(times, utc=True).dt.tz_localize(None)
     rounded = t.dt.round('h')
@@ -85,12 +94,32 @@ def strip_erddap_units_row(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_erddap_csv(url: str) -> pd.DataFrame:
-    r = requests.get(url, timeout=240)
-    if not r.ok or r.text.startswith('Error {'):
-        raise RuntimeError(r.text[:1200])
-    df = pd.read_csv(io.StringIO(r.text))
-    df.columns = [re.sub(r'\s*\(.*?\)\s*$', '', str(c)).strip() for c in df.columns]
-    return strip_erddap_units_row(df)
+    last_error = None
+    for attempt in range(4):
+        try:
+            r = requests.get(url, timeout=240)
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+
+        if r.ok and not r.text.startswith('Error {'):
+            df = pd.read_csv(io.StringIO(r.text))
+            df.columns = [re.sub(r'\s*\(.*?\)\s*$', '', str(c)).strip() for c in df.columns]
+            return strip_erddap_units_row(df)
+
+        last_error = RuntimeError(r.text[:1200])
+        retryable = r.status_code in {429, 500, 502, 503, 504} or 'Service Unavailable' in r.text
+        if retryable and attempt < 3:
+            time.sleep(2 * (attempt + 1))
+            continue
+        raise last_error
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError('Unexpected ERDDAP load failure.')
 
 
 def clean_hourly_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -175,7 +204,7 @@ def _tidal_day_windows(times: pd.Series, values: np.ndarray) -> Tuple[np.ndarray
     return np.array(max_list, dtype=float), np.array(min_list, dtype=float), np.array(mean_list, dtype=float)
 
 
-def compute_datums(df_epoch: pd.DataFrame) -> DatumResult:
+def compute_datums(df_epoch: pd.DataFrame, epoch_prediction: pd.DataFrame | None = None) -> DatumResult:
     df_epoch = clean_hourly_dataframe(df_epoch)
     df_epoch = df_epoch.dropna(subset=['sea_level'])
     if len(df_epoch) < 24:
@@ -206,16 +235,25 @@ def compute_datums(df_epoch: pd.DataFrame) -> DatumResult:
     MN = float(MHW - MLW)
     DHQ = float(MHHW - MHW)
     DLQ = float(MLW - MLLW)
-    HAT = float(np.nanmax(y))
-    LAT = float(np.nanmin(y))
+    pred_y = y
+    if epoch_prediction is not None:
+        pred_df = epoch_prediction.copy()
+        if 'prediction_mm' not in pred_df.columns:
+            raise ValueError("epoch_prediction must include a 'prediction_mm' column.")
+        pred_y = pd.to_numeric(pred_df['prediction_mm'], errors='coerce').to_numpy(dtype=float)
+        pred_y = pred_y[np.isfinite(pred_y)]
+        if len(pred_y) == 0:
+            raise ValueError('epoch_prediction must contain at least one finite predicted value.')
 
-    y_mllw = y - MLLW if np.isfinite(MLLW) else y * np.nan
-    p90_low = float(np.nanpercentile(y_mllw, 10))
-    p95_low = float(np.nanpercentile(y_mllw, 5))
-    p99_low = float(np.nanpercentile(y_mllw, 1))
-    p90_high = float(np.nanpercentile(y_mllw, 90))
-    p95_high = float(np.nanpercentile(y_mllw, 95))
-    p99_high = float(np.nanpercentile(y_mllw, 99))
+    HAT = float(np.nanmax(pred_y))
+    LAT = float(np.nanmin(pred_y))
+
+    p90_low = float(np.nanpercentile(y, 10))
+    p95_low = float(np.nanpercentile(y, 5))
+    p99_low = float(np.nanpercentile(y, 1))
+    p90_high = float(np.nanpercentile(y, 90))
+    p95_high = float(np.nanpercentile(y, 95))
+    p99_high = float(np.nanpercentile(y, 99))
 
     return DatumResult(tide_type=tide_type, MHHW=MHHW, MHW=MHW, DTL=DTL, MTL=MTL, MSL=MSL, MLW=MLW, MLLW=MLLW, GT=GT, MN=MN, DHQ=DHQ, DLQ=DLQ, HAT=HAT, LAT=LAT, p90_low=p90_low, p95_low=p95_low, p99_low=p99_low, p90_high=p90_high, p95_high=p95_high, p99_high=p99_high)
 
@@ -252,6 +290,57 @@ def fit_harmonics(df_epoch: pd.DataFrame, latitude: float) -> HarmonicResult:
     mean_mm = float(getattr(coef, 'mean', np.nanmean(y_mm)))
     slope = float(getattr(coef, 'slope', 0.0))
     return HarmonicResult(constituent=names, amplitude_mm=amps, phase_deg=phases, mean_mm=mean_mm, slope_mm_per_day=slope, coef=coef)
+
+
+def strip_harmonic_result(harmonics: HarmonicResult) -> HarmonicResult:
+    return HarmonicResult(
+        constituent=list(harmonics.constituent),
+        amplitude_mm=list(harmonics.amplitude_mm),
+        phase_deg=list(harmonics.phase_deg),
+        mean_mm=float(harmonics.mean_mm),
+        slope_mm_per_day=float(harmonics.slope_mm_per_day),
+        coef=None,
+    )
+
+
+def save_harmonic_result(harmonics: HarmonicResult, path: str, metadata: dict | None = None) -> dict:
+    outpath = Path(path)
+    outpath.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'metadata': metadata or {},
+        'harmonics': {
+            'constituent': list(harmonics.constituent),
+            'amplitude_mm': list(harmonics.amplitude_mm),
+            'phase_deg': list(harmonics.phase_deg),
+            'mean_mm': float(harmonics.mean_mm),
+            'slope_mm_per_day': float(harmonics.slope_mm_per_day),
+        },
+        'coef': harmonics.coef,
+    }
+    with outpath.open('wb') as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    json_path = outpath.with_suffix('.json')
+    json_payload = {
+        'metadata': metadata or {},
+        'harmonics': payload['harmonics'],
+    }
+    json_path.write_text(json.dumps(json_payload, indent=2, default=str))
+    return {'pickle': str(outpath), 'json': str(json_path)}
+
+
+def load_harmonic_result(path: str) -> HarmonicResult:
+    with Path(path).open('rb') as f:
+        payload = pickle.load(f)
+    harmonics = payload.get('harmonics', {})
+    return HarmonicResult(
+        constituent=[str(v) for v in harmonics.get('constituent', [])],
+        amplitude_mm=[float(v) for v in harmonics.get('amplitude_mm', [])],
+        phase_deg=[float(v) for v in harmonics.get('phase_deg', [])],
+        mean_mm=float(harmonics.get('mean_mm', np.nan)),
+        slope_mm_per_day=float(harmonics.get('slope_mm_per_day', 0.0)),
+        coef=payload.get('coef'),
+    )
 
 
 def predict_from_harmonics(harmonics: HarmonicResult, start: pd.Timestamp, end: pd.Timestamp, freq: str = '1h') -> pd.DataFrame:

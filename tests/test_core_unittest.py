@@ -8,7 +8,7 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, predict_from_harmonics, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_netcdf
+from core import cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, load_harmonic_result, predict_from_harmonics, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result, save_netcdf, strip_harmonic_result
 
 
 class TestTidalCore(unittest.TestCase):
@@ -33,9 +33,16 @@ class TestTidalCore(unittest.TestCase):
 
     def test_compute_datums(self):
         df = self.synthetic_hourly()
-        dat = compute_datums(df)
+        pred = pd.DataFrame({
+            'time': df['time'],
+            'prediction_mm': np.full(len(df), 123.0),
+        })
+        dat = compute_datums(df, epoch_prediction=pred)
         self.assertTrue(np.isfinite(dat.MSL))
-        self.assertTrue(dat.HAT > dat.LAT)
+        self.assertEqual(dat.HAT, 123.0)
+        self.assertEqual(dat.LAT, 123.0)
+        self.assertAlmostEqual(dat.p90_low, float(np.nanpercentile(df['sea_level'].to_numpy(dtype=float), 10)))
+        self.assertAlmostEqual(dat.p99_high, float(np.nanpercentile(df['sea_level'].to_numpy(dtype=float), 99)))
         self.assertIn(dat.tide_type, ['Diurnal', 'Semidiurnal/Mixed', 'Unknown'])
 
     def test_harmonics_and_prediction(self):
@@ -45,6 +52,27 @@ class TestTidalCore(unittest.TestCase):
         pred = predict_from_harmonics(hr, pd.Timestamp('2002-04-01 00:00:00'), pd.Timestamp('2002-04-03 23:00:00'))
         self.assertEqual(len(pred), 72)
         self.assertTrue(np.isfinite(pred['prediction_mm']).all())
+
+    def test_harmonic_artifact_roundtrip(self):
+        df = self.synthetic_hourly(start='2002-01-01 00:00:00', end='2002-03-31 23:00:00')
+        hr = fit_harmonics(df, latitude=21.3)
+        start = pd.Timestamp('2002-02-01 00:00:00')
+        end = pd.Timestamp('2002-02-05 23:00:00')
+        direct = predict_from_harmonics(hr, start, end)
+        summary = strip_harmonic_result(hr)
+        self.assertIsNone(summary.coef)
+        with tempfile.TemporaryDirectory() as td:
+            paths = save_harmonic_result(hr, str(Path(td) / 'harmonics.pkl'), metadata={'station_id': '001'})
+            self.assertTrue(Path(paths['pickle']).exists())
+            self.assertTrue(Path(paths['json']).exists())
+            reloaded = load_harmonic_result(paths['pickle'])
+            self.assertEqual(reloaded.constituent, hr.constituent)
+            roundtrip = predict_from_harmonics(reloaded, start, end)
+            np.testing.assert_allclose(roundtrip['prediction_mm'].to_numpy(), direct['prediction_mm'].to_numpy())
+
+    def test_cap_prediction_end(self):
+        self.assertEqual(cap_prediction_end(pd.Timestamp('2030-01-01 00:00:00')), pd.Timestamp('2030-01-01 00:00:00'))
+        self.assertEqual(cap_prediction_end(pd.Timestamp('2100-12-31 23:00:00')), pd.Timestamp('2035-12-31 23:00:00'))
 
     def test_extract_daily_high_low(self):
         time = pd.date_range('2023-01-01 00:00:00', '2023-01-03 23:59:00', freq='1min')
@@ -70,9 +98,9 @@ class TestTidalCore(unittest.TestCase):
         df = self.synthetic_hourly()
         epochs = select_epochs(df)
         ep = epochs[0]
-        dat = compute_datums(df)
         hr = fit_harmonics(df, latitude=21.3)
         pred = predict_from_harmonics(hr, ep.start, ep.end)
+        dat = compute_datums(df, epoch_prediction=pred)
         ds = build_netcdf_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat}, {ep.name: hr}, {ep.name: pred})
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'test.nc'
@@ -86,7 +114,9 @@ class TestTidalCore(unittest.TestCase):
         df = self.synthetic_hourly()
         epochs = select_epochs(df)
         ep = epochs[0]
-        dat = compute_datums(df)
+        hr = fit_harmonics(df, latitude=21.3)
+        pred = predict_from_harmonics(hr, ep.start, ep.end)
+        dat = compute_datums(df, epoch_prediction=pred)
         ds = build_datums_only_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat})
         self.assertEqual(ds.attrs['content'], 'datums_only')
         self.assertEqual(str(ds['MHHW'].dtype), 'int32')

@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 import sys
+import gc
 
 import matplotlib
 matplotlib.use("Agg")
@@ -14,15 +15,19 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (
+    cap_prediction_end,
     build_netcdf_dataset,
     clean_hourly_dataframe,
     compute_datums,
     fetch_fd_hourly,
     fetch_rq_hourly,
     fit_harmonics,
+    load_harmonic_result,
     predict_from_harmonics,
+    save_harmonic_result,
     save_netcdf,
     select_epochs,
+    strip_harmonic_result,
 )
 
 
@@ -108,6 +113,7 @@ def _run_record(
     datum_by_epoch = {}
     harmonics_by_epoch = {}
     hourly_predictions = {}
+    harmonic_artifacts = {}
     minute_highlow_by_epoch = {}
     epoch_summaries = []
     plot_dir = outdir / "plots" / record_id
@@ -115,17 +121,40 @@ def _run_record(
 
     for ep in epochs:
         sub = df[(df["time"] >= ep.start) & (df["time"] <= ep.end)].copy()
-        datum = compute_datums(sub)
-        harmonics = fit_harmonics(sub, latitude=LATITUDE_007)
-        pred_end = pd.Timestamp("2100-12-31 23:00:00") if station_kind == "FD" else ep.end
-        hourly_pred = predict_from_harmonics(harmonics, ep.start, pred_end, freq="1h")
+        fitted_harmonics = fit_harmonics(sub, latitude=LATITUDE_007)
+        harmonic_path = outdir / "harmonics" / record_id / f"{ep.name}_harmonics.pkl"
+        harmonic_artifacts[ep.name] = save_harmonic_result(
+            fitted_harmonics,
+            str(harmonic_path),
+            metadata={
+                "station_id": record_id,
+                "station_name": station_name,
+                "station_kind": station_kind,
+                "epoch_name": ep.name,
+                "epoch_start": str(ep.start),
+                "epoch_end": str(ep.end),
+                "latitude": float(LATITUDE_007),
+            },
+        )
+        harmonics_summary = strip_harmonic_result(fitted_harmonics)
+        del fitted_harmonics
+        gc.collect()
+
+        harmonics = load_harmonic_result(harmonic_artifacts[ep.name]["pickle"])
+        epoch_hourly_pred = predict_from_harmonics(harmonics, ep.start, ep.end, freq="1h")
+        datum = compute_datums(sub, epoch_prediction=epoch_hourly_pred)
+        pred_end = cap_prediction_end(pd.Timestamp("2100-12-31 23:00:00") if station_kind == "FD" else ep.end)
+        if pred_end == ep.end:
+            hourly_pred = epoch_hourly_pred
+        else:
+            hourly_pred = predict_from_harmonics(harmonics, ep.start, pred_end, freq="1h")
 
         datum_by_epoch[ep.name] = datum
-        harmonics_by_epoch[ep.name] = harmonics
+        harmonics_by_epoch[ep.name] = harmonics_summary
         hourly_predictions[ep.name] = hourly_pred
 
         observed = sub.dropna(subset=["sea_level"])[["time", "sea_level"]].copy()
-        within_epoch_pred = hourly_pred[(hourly_pred["time"] >= ep.start) & (hourly_pred["time"] <= ep.end)].copy()
+        within_epoch_pred = epoch_hourly_pred.copy()
         merged = observed.merge(within_epoch_pred, on="time", how="inner")
         compare_meta = _plot_hourly_comparison(
             plot_dir / f"{ep.name}_hourly_observed_vs_predicted.png",
@@ -147,6 +176,7 @@ def _run_record(
                 "datum": asdict(datum),
                 "harmonic_constituent_count": int(len(harmonics.constituent)),
                 "top_constituents": harmonics.constituent[:12],
+                "harmonic_artifact": harmonic_artifacts[ep.name],
                 "hourly_prediction_rows": int(len(hourly_pred)),
                 "hourly_observed_rows": int(len(observed)),
                 "hourly_overlap_rows": int(len(merged)),
@@ -160,6 +190,8 @@ def _run_record(
                 "fd_high_low_rows": minute_rows,
             }
         )
+        del harmonics, sub, epoch_hourly_pred
+        gc.collect()
 
     ds = build_netcdf_dataset(
         record_id,
@@ -185,6 +217,7 @@ def _run_record(
         "station_name": station_name,
         "station_kind": station_kind,
         "netcdf": str(nc_path),
+        "harmonic_artifacts": harmonic_artifacts,
         "epochs": epoch_summaries,
     }
 
@@ -201,7 +234,7 @@ def main() -> None:
     summary["records"].append(_run_record("007", "RQ", OUTPUT_ROOT, version="B"))
 
     summary_path = OUTPUT_ROOT / "summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2))
+    summary_path.write_text(json.dumps(summary, indent=2, default=str))
 
     md_lines = [
         "# Station 007 Full Test",
