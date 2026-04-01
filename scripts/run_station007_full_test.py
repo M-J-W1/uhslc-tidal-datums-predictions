@@ -57,6 +57,37 @@ def _plot_hourly_comparison(plot_path: Path, merged: pd.DataFrame, title: str) -
     }
 
 
+def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> str:
+    plot_df = series.dropna(subset=["sea_level"]).head(24 * 31).copy()
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(plot_df["time"], plot_df["sea_level"], color="0.25", linewidth=0.9, label="Observed hourly sea level")
+    datum_lines = {
+        "MHHW": datum.MHHW,
+        "MHW": datum.MHW,
+        "MSL": datum.MSL,
+        "MLW": datum.MLW,
+        "MLLW": datum.MLLW,
+    }
+    colors = {
+        "MHHW": "tab:blue",
+        "MHW": "tab:cyan",
+        "MSL": "tab:green",
+        "MLW": "tab:orange",
+        "MLLW": "tab:red",
+    }
+    for name, value in datum_lines.items():
+        ax.axhline(value, color=colors[name], linestyle="--", linewidth=1.1, label=f"{name} = {value:.1f} mm")
+    ax.set_title(title)
+    ax.set_ylabel("Sea Level (mm, station zero)")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    return str(plot_path)
+
+
 def _plot_residuals(plot_path: Path, merged: pd.DataFrame, title: str) -> str:
     plot_df = merged.head(24 * 31).copy()
     residual = plot_df["sea_level"] - plot_df["prediction_mm"]
@@ -160,6 +191,12 @@ def _run_record(
             minute_highlow = pd.DataFrame(columns=["time", "height_mm", "type"])
 
         observed = sub.dropna(subset=["sea_level"])[["time", "sea_level"]].copy()
+        datum_plot = _plot_datums(
+            plot_dir / f"{ep.name}_datums.png",
+            sub,
+            datum,
+            f"{record_id} {ep.name}: tidal datums",
+        )
         within_epoch_pred = epoch_hourly_pred.copy()
         merged = observed.merge(within_epoch_pred, on="time", how="inner")
         compare_meta = _plot_hourly_comparison(
@@ -193,6 +230,7 @@ def _run_record(
                 "hourly_observed_rows": int(len(observed)),
                 "hourly_overlap_rows": int(len(merged)),
                 "plots": {
+                    "datums": datum_plot,
                     "hourly_observed_vs_predicted": compare_meta["comparison_plot"],
                     "hourly_residuals": residual_plot,
                     "fd_high_low": minute_plot,
