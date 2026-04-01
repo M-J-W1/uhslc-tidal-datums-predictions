@@ -1,0 +1,76 @@
+import unittest
+from pathlib import Path
+import tempfile
+import numpy as np
+import pandas as pd
+import xarray as xr
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core import clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, predict_from_harmonics, extract_daily_high_low, build_netcdf_dataset, save_netcdf
+
+
+class TestTidalCore(unittest.TestCase):
+    @staticmethod
+    def synthetic_hourly(start='2002-01-01 00:00:00', end='2002-08-31 23:00:00'):
+        time = pd.date_range(start, end, freq='1h')
+        hours = np.arange(len(time), dtype=float)
+        sea = 1000*np.sin(2*np.pi*hours/12.42) + 250*np.sin(2*np.pi*hours/24.0) + 10*np.random.default_rng(42).normal(size=len(time))
+        return pd.DataFrame({'time': time, 'sea_level': sea})
+
+    def test_clean_dataframe(self):
+        df = pd.DataFrame({'time': ['2002-01-01 00:00:00','2002-01-01 00:00:00','2002-01-01 01:00:00'], 'sea_level': [1, -32767, 3]})
+        out = clean_hourly_dataframe(df)
+        self.assertEqual(len(out), 2)
+        self.assertTrue(np.isfinite(out['sea_level'].iloc[-1]))
+
+    def test_select_recent_epoch(self):
+        df = self.synthetic_hourly()
+        epochs = select_epochs(df)
+        self.assertTrue(len(epochs) >= 1)
+        self.assertEqual(epochs[0].source, 'recent')
+
+    def test_compute_datums(self):
+        df = self.synthetic_hourly()
+        dat = compute_datums(df)
+        self.assertTrue(np.isfinite(dat.MSL))
+        self.assertTrue(dat.HAT > dat.LAT)
+        self.assertIn(dat.tide_type, ['Diurnal', 'Semidiurnal/Mixed', 'Unknown'])
+
+    def test_harmonics_and_prediction(self):
+        df = self.synthetic_hourly()
+        hr = fit_harmonics(df, latitude=21.3)
+        self.assertTrue(len(hr.constituent) > 0)
+        pred = predict_from_harmonics(hr, pd.Timestamp('2002-04-01 00:00:00'), pd.Timestamp('2002-04-03 23:00:00'))
+        self.assertEqual(len(pred), 72)
+        self.assertTrue(np.isfinite(pred['prediction_mm']).all())
+
+    def test_extract_daily_high_low(self):
+        time = pd.date_range('2023-01-01 00:00:00', '2023-01-03 23:59:00', freq='1min')
+        minutes = np.arange(len(time), dtype=float)
+        pred = 1000*np.sin(2*np.pi*minutes/(12.42*60))
+        df = pd.DataFrame({'time': time, 'prediction_mm': pred})
+        hl = extract_daily_high_low(df)
+        self.assertTrue(len(hl) >= 6)
+        self.assertTrue(set(hl['type'].unique()).issubset({'H','L'}))
+
+    def test_netcdf_write(self):
+        df = self.synthetic_hourly()
+        epochs = select_epochs(df)
+        ep = epochs[0]
+        dat = compute_datums(df)
+        hr = fit_harmonics(df, latitude=21.3)
+        pred = predict_from_harmonics(hr, ep.start, ep.end)
+        ds = build_netcdf_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat}, {ep.name: hr}, {ep.name: pred})
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'test.nc'
+            save_netcdf(ds, str(path))
+            self.assertTrue(path.exists())
+            reopened = xr.open_dataset(path)
+            self.assertEqual(reopened.attrs['station_id'], '001')
+            reopened.close()
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,96 @@
+# UHSLC Tidal Datums and Predictions Handoff Package
+
+## Purpose
+This package contains the current prototype implementation developed from the uploaded instructions for:
+- tidal datum calculation,
+- harmonic fitting,
+- tide prediction generation,
+- NetCDF output,
+- and batch-style processing for UHSLC FD/RQ station records.
+
+It is prepared for handoff into another repository or another computer.
+
+## Included Files
+
+### Core scripts
+- `core.py` — main processing logic
+- `tidal_batch.py` — command-line driver
+- `tests/test_core_unittest.py` — unit tests using `unittest`
+
+### Local support / driver data
+- `data/fd_metadata.geojson` — copied from the local IDEA environment because it may not be conveniently available in the target repo/environment
+
+### Documentation
+- `docs/instructions_extracted.txt` — extracted text from the original instruction document
+- `docs/instructions_summary.txt` — line-numbered instruction dump
+- `docs/rq_full_span_probe_001.json` — evidence from RQ ERDDAP probing for station 001
+- `docs/rq_full_span_probe_002.json` — evidence from RQ ERDDAP probing for station 002
+- `docs/fd_run_summary.json` — summary from FD real-data prototype runs
+
+## Environment Assumptions
+This prototype was developed in Python 3.11 and used:
+- `numpy`
+- `pandas`
+- `xarray`
+- `netCDF4`
+- `scipy`
+- `matplotlib`
+- `utide`
+- `requests`
+- `PyYAML`
+- `beautifulsoup4`
+
+Suggested install example:
+
+```bash
+pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml beautifulsoup4
+```
+
+## Current Functional Status
+
+### Working
+- Unit tests pass for the synthetic/prototype workflow.
+- Real FD ERDDAP loading works.
+- Full available FD ERDDAP span for station `001` was confirmed.
+- Real FD prototype outputs were successfully generated earlier for stations `001`, `002`, `003`, and `007` using shorter operational windows.
+- Full RQ ERDDAP spans were confirmed for station `002` versions `A`, `B`, `C`, `D`.
+
+### Known limitations
+- Full-record end-to-end processing for FD `001` was killed by the OS (`return code -9`), likely due to resource pressure in the current implementation.
+- RQ availability through ERDDAP appears inconsistent for station `001`; ERDDAP exposed `001C` but not `001A` or `001B`, even though the YAML metadata index lists those versions.
+- The harmonic implementation is still prototype-level and not yet a full legacy-equivalent production workflow.
+- The current code should be refactored for memory-safe full-record processing before production use.
+
+## Recommended Next Refactors
+1. **Process full records lazily/in chunks** instead of building very large in-memory arrays.
+2. **Limit prediction generation to selected epochs only** after epoch selection, rather than retaining oversized intermediate arrays.
+3. **Refine RQ mapping** to reconcile ERDDAP exposure vs YAML metadata records.
+4. **Expand harmonic constituents** and align more closely with legacy software behavior.
+5. **Add integration tests** for real ERDDAP station runs.
+
+## Basic Usage
+
+### Run unit tests
+```bash
+python -m unittest discover -s tests -v
+```
+
+### FD example
+```bash
+python tidal_batch.py   --mode fd   --station-id 001   --station-name Pohnpei   --station-kind FD   --latitude 6.9833   --output-dir outputs
+```
+
+### RQ example
+```bash
+python tidal_batch.py   --mode rq   --station-id 002   --station-name "Tarawa, Bairiki"   --station-kind RQ   --version A   --latitude 1.33   --output-dir outputs
+```
+
+## Important Notes for the Handoff Repo
+- `fd_metadata.geojson` is included locally in `data/` because it is a key support file.
+- The current code relies on direct ERDDAP access to:
+  - `global_hourly_fast`
+  - `global_hourly_rqds`
+- If the receiving environment has stricter memory limits, full-record runs may need chunking immediately.
+
+## Source Context
+This package was assembled from work performed in an IDEA/SEA environment and is intended as a **prototype handoff**, not a final production release.

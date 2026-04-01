@@ -1,0 +1,389 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Dict, Tuple
+import io
+import re
+import math
+
+import numpy as np
+import pandas as pd
+import xarray as xr
+import requests
+import yaml
+from bs4 import BeautifulSoup
+from scipy.signal import find_peaks
+from utide import solve, reconstruct
+from matplotlib.dates import date2num
+
+MISSING_VALUE = -32767
+ERDDAP_BASE = 'https://uhslc.soest.hawaii.edu/erddap/tabledap'
+RQ_META_INDEX = 'https://uhslc.soest.hawaii.edu/rqds/metadata_yaml/'
+PRIMARY_EPOCHS = [
+    ("NTDE_1983-2001", pd.Timestamp("1983-01-01 00:00:00"), pd.Timestamp("2001-12-31 23:00:00")),
+    ("NTDE_2002-2020", pd.Timestamp("2002-01-01 00:00:00"), pd.Timestamp("2020-12-31 23:00:00")),
+    ("IPCC-AR6_1995-2014", pd.Timestamp("1995-01-01 00:00:00"), pd.Timestamp("2014-12-31 23:00:00")),
+]
+
+@dataclass
+class Epoch:
+    name: str
+    start: pd.Timestamp
+    end: pd.Timestamp
+    source: str
+    completion_fraction: float
+    n_expected: int
+    n_valid: int
+
+@dataclass
+class HarmonicResult:
+    constituent: List[str]
+    amplitude_mm: List[float]
+    phase_deg: List[float]
+    mean_mm: float
+    slope_mm_per_day: float
+    coef: object | None = None
+
+@dataclass
+class DatumResult:
+    tide_type: str
+    MHHW: float
+    MHW: float
+    DTL: float
+    MTL: float
+    MSL: float
+    MLW: float
+    MLLW: float
+    GT: float
+    MN: float
+    DHQ: float
+    DLQ: float
+    HAT: float
+    LAT: float
+    p90_low: float
+    p95_low: float
+    p99_low: float
+    p90_high: float
+    p95_high: float
+    p99_high: float
+
+
+def snap_to_hour(times: pd.Series) -> pd.Series:
+    t = pd.to_datetime(times, utc=True).dt.tz_localize(None)
+    rounded = t.dt.round('h')
+    delta = (t - rounded).abs()
+    ok = delta <= pd.Timedelta(minutes=5)
+    out = t.copy()
+    out.loc[ok] = rounded.loc[ok]
+    return out
+
+
+def strip_erddap_units_row(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if len(out) and 'time' in out.columns and str(out.iloc[0]['time']) == 'UTC':
+        out = out.iloc[1:].copy()
+    return out.reset_index(drop=True)
+
+
+def load_erddap_csv(url: str) -> pd.DataFrame:
+    r = requests.get(url, timeout=240)
+    if not r.ok or r.text.startswith('Error {'):
+        raise RuntimeError(r.text[:1200])
+    df = pd.read_csv(io.StringIO(r.text))
+    df.columns = [re.sub(r'\s*\(.*?\)\s*$', '', str(c)).strip() for c in df.columns]
+    return strip_erddap_units_row(df)
+
+
+def clean_hourly_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out['time'] = pd.to_datetime(out['time'], utc=True).dt.tz_localize(None)
+    out = out.sort_values('time').drop_duplicates('time')
+    out['sea_level'] = pd.to_numeric(out['sea_level'], errors='coerce').astype(float)
+    out.loc[out['sea_level'] == MISSING_VALUE, 'sea_level'] = np.nan
+    return out.reset_index(drop=True)
+
+
+def expected_hourly_count(start: pd.Timestamp, end: pd.Timestamp) -> int:
+    return int(((end - start) / pd.Timedelta(hours=1)) + 1)
+
+
+def epoch_completion(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> Tuple[int, int, float]:
+    mask = (df['time'] >= start) & (df['time'] <= end)
+    sub = df.loc[mask, ['time', 'sea_level']].copy()
+    expected = expected_hourly_count(start, end)
+    valid = int(sub['sea_level'].notna().sum())
+    fraction = valid / expected if expected else 0.0
+    return expected, valid, fraction
+
+
+def select_epochs(df: pd.DataFrame, min_fraction: float = 0.75, min_months_recent: int = 6) -> List[Epoch]:
+    df = clean_hourly_dataframe(df)
+    epochs: List[Epoch] = []
+    for name, start, end in PRIMARY_EPOCHS:
+        expected, valid_n, frac = epoch_completion(df, start, end)
+        if frac >= min_fraction:
+            epochs.append(Epoch(name=name, start=start, end=end, source='primary', completion_fraction=frac, n_expected=expected, n_valid=valid_n))
+
+    if epochs:
+        return epochs[:3]
+
+    valid = df.dropna(subset=['sea_level'])
+    if valid.empty:
+        return []
+
+    data_start = valid['time'].min().floor('h')
+    data_end = valid['time'].max().floor('h')
+    min_span = pd.Timedelta(days=30 * min_months_recent)
+    if (data_end - data_start) < min_span:
+        return []
+
+    best = None
+    for months in range(228, min_months_recent - 1, -1):
+        start = data_end - pd.DateOffset(months=months)
+        if start < data_start:
+            start = data_start
+        if (data_end - start) < min_span:
+            continue
+        expected, valid_n, frac = epoch_completion(df, start, data_end)
+        if frac > min_fraction:
+            best = (start, data_end, expected, valid_n, frac)
+            break
+
+    if best is not None:
+        start, end, expected, valid_n, frac = best
+        epochs.append(Epoch(name=f'RECENT_{start.date()}_{end.date()}', start=start, end=end, source='recent', completion_fraction=frac, n_expected=expected, n_valid=valid_n))
+    return epochs[:3]
+
+
+def _tidal_day_windows(times: pd.Series, values: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    t0 = times.iloc[0]
+    t1 = times.iloc[-1]
+    tidal_day = pd.Timedelta(hours=24, minutes=50)
+    starts = []
+    cur = t0
+    while cur + tidal_day <= t1:
+        starts.append(cur)
+        cur += tidal_day
+    max_list, min_list, mean_list = [], [], []
+    for s in starts:
+        e = s + tidal_day
+        mask = (times >= s) & (times < e)
+        window = values[mask.to_numpy()]
+        if np.isfinite(window).sum() >= 20:
+            max_list.append(np.nanmax(window))
+            min_list.append(np.nanmin(window))
+            mean_list.append(np.nanmean(window))
+    return np.array(max_list, dtype=float), np.array(min_list, dtype=float), np.array(mean_list, dtype=float)
+
+
+def compute_datums(df_epoch: pd.DataFrame) -> DatumResult:
+    df_epoch = clean_hourly_dataframe(df_epoch)
+    df_epoch = df_epoch.dropna(subset=['sea_level'])
+    if len(df_epoch) < 24:
+        raise ValueError('Not enough valid hourly data to compute datums.')
+
+    y = df_epoch['sea_level'].to_numpy(dtype=float)
+    t = df_epoch['time']
+    highs, _ = find_peaks(y, distance=6)
+    lows, _ = find_peaks(-y, distance=6)
+    hw = y[highs] if len(highs) else np.array([np.nan])
+    lw = y[lows] if len(lows) else np.array([np.nan])
+    MHW = float(np.nanmean(hw))
+    MLW = float(np.nanmean(lw))
+
+    if len(highs) > 1:
+        t_delta_hours = np.diff(t.iloc[highs]).astype('timedelta64[m]').astype(float) / 60.0
+        tide_type = 'Diurnal' if np.nanmean(t_delta_hours) > 18 else 'Semidiurnal/Mixed'
+    else:
+        tide_type = 'Unknown'
+
+    max_list, min_list, _ = _tidal_day_windows(t, y)
+    MHHW = float(np.nanmean(max_list)) if len(max_list) else np.nan
+    MLLW = float(np.nanmean(min_list)) if len(min_list) else np.nan
+    DTL = float((MHHW + MLLW) / 2.0)
+    MTL = float((MHW + MLW) / 2.0)
+    MSL = float(np.nanmean(y))
+    GT = float(MHHW - MLLW)
+    MN = float(MHW - MLW)
+    DHQ = float(MHHW - MHW)
+    DLQ = float(MLW - MLLW)
+    HAT = float(np.nanmax(y))
+    LAT = float(np.nanmin(y))
+
+    y_mllw = y - MLLW if np.isfinite(MLLW) else y * np.nan
+    p90_low = float(np.nanpercentile(y_mllw, 10))
+    p95_low = float(np.nanpercentile(y_mllw, 5))
+    p99_low = float(np.nanpercentile(y_mllw, 1))
+    p90_high = float(np.nanpercentile(y_mllw, 90))
+    p95_high = float(np.nanpercentile(y_mllw, 95))
+    p99_high = float(np.nanpercentile(y_mllw, 99))
+
+    return DatumResult(tide_type=tide_type, MHHW=MHHW, MHW=MHW, DTL=DTL, MTL=MTL, MSL=MSL, MLW=MLW, MLLW=MLLW, GT=GT, MN=MN, DHQ=DHQ, DLQ=DLQ, HAT=HAT, LAT=LAT, p90_low=p90_low, p95_low=p95_low, p99_low=p99_low, p90_high=p90_high, p95_high=p95_high, p99_high=p99_high)
+
+
+def fit_harmonics(df_epoch: pd.DataFrame, latitude: float) -> HarmonicResult:
+    df_epoch = clean_hourly_dataframe(df_epoch)
+    df_epoch = df_epoch.dropna(subset=['sea_level'])
+    if len(df_epoch) < 24 * 30:
+        raise ValueError('Need at least ~30 days of valid hourly data for harmonic analysis.')
+
+    t = df_epoch['time']
+    y_mm = df_epoch['sea_level'].to_numpy(dtype=float)
+    t_num = date2num(t.dt.to_pydatetime())
+    coef = solve(t_num, y_mm, lat=float(latitude), trend=True, method='ols', nodal=True, conf_int='linear', verbose=False)
+
+    names = [str(c) for c in np.atleast_1d(coef.name)] if hasattr(coef, 'name') else []
+    amps = [float(v) for v in np.atleast_1d(coef.A)] if hasattr(coef, 'A') else []
+    phases = [float(v) for v in np.atleast_1d(coef.g)] if hasattr(coef, 'g') else []
+    mean_mm = float(getattr(coef, 'mean', np.nanmean(y_mm)))
+    slope = float(getattr(coef, 'slope', 0.0))
+    return HarmonicResult(constituent=names, amplitude_mm=amps, phase_deg=phases, mean_mm=mean_mm, slope_mm_per_day=slope, coef=coef)
+
+
+def predict_from_harmonics(harmonics: HarmonicResult, start: pd.Timestamp, end: pd.Timestamp, freq: str = '1h') -> pd.DataFrame:
+    if end < start:
+        raise ValueError('Prediction end precedes start.')
+    time = pd.date_range(start=start, end=end, freq=freq)
+    if len(time) == 0:
+        return pd.DataFrame({'time': [], 'prediction_mm': []})
+    if harmonics.coef is None:
+        raise ValueError('UTide coefficients not available for reconstruction.')
+    coef = harmonics.coef
+    if hasattr(coef, 'slope'):
+        coef.slope = 0.0
+    t_num = date2num(time.to_pydatetime())
+    recon = reconstruct(t_num, coef, verbose=False)
+    pred = np.asarray(recon.h, dtype=float)
+    return pd.DataFrame({'time': time, 'prediction_mm': pred})
+
+
+def extract_daily_high_low(minute_pred_df: pd.DataFrame) -> pd.DataFrame:
+    df = minute_pred_df.copy()
+    df['time'] = pd.to_datetime(df['time'])
+    df = df.sort_values('time')
+    y = df['prediction_mm'].to_numpy(dtype=float)
+    peaks, _ = find_peaks(y, distance=60*6)
+    troughs, _ = find_peaks(-y, distance=60*6)
+    events = pd.concat([
+        pd.DataFrame({'time': df.iloc[peaks]['time'].to_numpy(), 'height_mm': y[peaks], 'type': 'H'}),
+        pd.DataFrame({'time': df.iloc[troughs]['time'].to_numpy(), 'height_mm': y[troughs], 'type': 'L'}),
+    ], ignore_index=True).sort_values('time')
+    if events.empty:
+        return events
+    events['date'] = events['time'].dt.date
+    rows = []
+    for _, grp in events.groupby('date'):
+        highs = grp[grp['type'] == 'H'].nlargest(2, 'height_mm')
+        lows = grp[grp['type'] == 'L'].nsmallest(2, 'height_mm')
+        rows.append(pd.concat([highs, lows]).sort_values('time'))
+    out = pd.concat(rows, ignore_index=True).sort_values('time') if rows else pd.DataFrame(columns=['time','height_mm','type','date'])
+    return out[['time', 'height_mm', 'type']]
+
+
+def _round_mm_array(values):
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.floating):
+        return np.rint(arr).astype(np.int32)
+    return arr
+
+
+def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], harmonics_by_epoch: Dict[str, HarmonicResult], hourly_predictions: Dict[str, pd.DataFrame]) -> xr.Dataset:
+    epoch_names = [e.name for e in epochs]
+    max_const = max((len(harmonics_by_epoch[e].constituent for e in epoch_names)), default=0) if False else max((len(harmonics_by_epoch[e].constituent) for e in epoch_names), default=0)
+    const_arr = np.full((len(epoch_names), max_const), '', dtype=object)
+    amp_arr = np.full((len(epoch_names), max_const), np.nan, dtype=float)
+    phase_arr = np.full((len(epoch_names), max_const), np.nan, dtype=float)
+    for i, e in enumerate(epoch_names):
+        hr = harmonics_by_epoch[e]
+        n = len(hr.constituent)
+        const_arr[i, :n] = hr.constituent
+        amp_arr[i, :n] = np.rint(hr.amplitude_mm)
+        phase_arr[i, :n] = hr.phase_deg
+
+    ds = xr.Dataset(coords={'epoch': epoch_names, 'constituent_index': np.arange(max_const, dtype=int)})
+    ds.attrs['station_id'] = station_id
+    ds.attrs['station_name'] = station_name
+    ds.attrs['station_kind'] = station_kind
+    ds.attrs['reference_frame'] = 'Station Zero'
+    ds.attrs['time_zone'] = 'GMT'
+    ds.attrs['units'] = 'mm integer'
+
+    for field in DatumResult.__dataclass_fields__.keys():
+        if field == 'tide_type':
+            ds[field] = xr.DataArray(np.array([datum_by_epoch[e.name].tide_type for e in epochs], dtype=object), dims=['epoch'])
+        else:
+            vals = [round(getattr(datum_by_epoch[e.name], field)) for e in epochs]
+            ds[field] = xr.DataArray(np.array(vals, dtype=np.int32), dims=['epoch'])
+    ds['epoch_start'] = xr.DataArray(np.array([np.datetime64(e.start, 'ns') for e in epochs]), dims=['epoch'])
+    ds['epoch_end'] = xr.DataArray(np.array([np.datetime64(e.end, 'ns') for e in epochs]), dims=['epoch'])
+    ds['epoch_completion_fraction'] = xr.DataArray(np.array([e.completion_fraction for e in epochs], dtype=float), dims=['epoch'])
+    ds['harmonic_constituent'] = xr.DataArray(const_arr, dims=['epoch', 'constituent_index'])
+    ds['harmonic_amplitude_mm'] = xr.DataArray(_round_mm_array(amp_arr), dims=['epoch', 'constituent_index'])
+    ds['harmonic_phase_deg'] = xr.DataArray(np.array(np.rint(phase_arr), dtype=np.int32), dims=['epoch', 'constituent_index'])
+
+    for e in epoch_names:
+        pred = hourly_predictions.get(e)
+        if pred is not None and not pred.empty:
+            ds[f'hourly_prediction_{e}'] = xr.DataArray(_round_mm_array(pred['prediction_mm'].to_numpy(dtype=float)), dims=[f'time_{e}'], coords={f'time_{e}': pred['time'].to_numpy(dtype='datetime64[ns]')})
+
+    return ds
+
+
+def save_netcdf(ds: xr.Dataset, path: str) -> None:
+    encoding = {}
+    for name, var in ds.data_vars.items():
+        if np.issubdtype(var.dtype, np.integer):
+            encoding[name] = {'zlib': True, 'complevel': 4}
+        elif np.issubdtype(var.dtype, np.floating):
+            encoding[name] = {'zlib': True, 'complevel': 4, '_FillValue': np.nan}
+    ds.to_netcdf(path, encoding=encoding)
+
+
+def fetch_fd_hourly(station_id: str, start: str = '1800-01-01', end: str = '2100-12-31') -> pd.DataFrame:
+    sid = int(station_id)
+    url = f"{ERDDAP_BASE}/global_hourly_fast.csvp?sea_level,time,uhslc_id,record_id,station_name,station_country&uhslc_id={sid}&time>={start}T00:00:00Z&time<={end}T23:59:59Z"
+    df = load_erddap_csv(url)
+    df['time'] = snap_to_hour(df['time'])
+    df['sea_level'] = pd.to_numeric(df['sea_level'], errors='coerce')
+    return df[['time','sea_level','uhslc_id','record_id','station_name','station_country']]
+
+
+def fetch_rq_hourly(station_id: str, version: str, start: str | None = None, end: str | None = None) -> pd.DataFrame:
+    sid = int(station_id)
+    version = str(version).upper()
+    url = f"{ERDDAP_BASE}/global_hourly_rqds.csvp?sea_level,time,uhslc_id,record_id,station_name,station_country,version&uhslc_id={sid}&version=%22{version}%22"
+    if start is not None and end is not None:
+        url += f"&time>={start}T00:00:00Z&time<={end}T23:59:59Z"
+    df = load_erddap_csv(url)
+    df['time'] = snap_to_hour(df['time'])
+    df['sea_level'] = pd.to_numeric(df['sea_level'], errors='coerce')
+    return df[['time','sea_level','uhslc_id','record_id','station_name','station_country','version']]
+
+
+def list_rq_versions(station_ids: list[str]) -> dict:
+    r = requests.get(RQ_META_INDEX, timeout=60)
+    if not r.ok:
+        raise RuntimeError(f'Failed metadata index: {r.status_code}')
+    soup = BeautifulSoup(r.text, 'html.parser')
+    links = [a.get('href') for a in soup.find_all('a') if a.get('href')]
+    out = {sid: [] for sid in station_ids}
+    for href in links:
+        m = re.match(r'^(\d{3})([A-Z])meta\.yaml$', href)
+        if m and m.group(1) in out:
+            out[m.group(1)].append(m.group(2).upper())
+    for k in out:
+        out[k] = sorted(set(out[k]))
+    return out
+
+
+def get_rq_metadata_span(station_id: str, version: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    version = str(version).upper()
+    url = f"{RQ_META_INDEX}{station_id}{version}meta.yaml"
+    r = requests.get(url, timeout=60)
+    if not r.ok:
+        raise RuntimeError(f'Failed to fetch RQ metadata yaml: {url}')
+    meta = yaml.safe_load(r.text)
+    td = meta.get('Time_Details', {}) if isinstance(meta, dict) else {}
+    start = pd.to_datetime(td.get('Date_Start'), utc=True).tz_localize(None)
+    end = pd.to_datetime(td.get('Date_End'), utc=True).tz_localize(None)
+    return start, end
