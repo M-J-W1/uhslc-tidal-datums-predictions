@@ -3,6 +3,8 @@
 artifacts/*
 !artifacts/station007_full_test/
 !artifacts/station007_full_test/**
+!artifacts/station002_full_test/
+!artifacts/station002_full_test/**
 __pycache__/
 .pytest_cache/
 *.pyc

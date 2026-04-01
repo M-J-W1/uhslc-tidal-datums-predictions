@@ -76,13 +76,20 @@
           "hourly_observed_rows": 165292,
           "hourly_overlap_rows": 165292,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007/NTDE_1983-2001_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007/NTDE_1983-2001_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007/NTDE_1983-2001_hourly_residuals.png",
             "fd_high_low": "artifacts/station007_full_test/plots/007/NTDE_1983-2001_fd_high_low.png"
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 191.82050774617693,
-          "fd_high_low_rows": 8467
+          "fd_high_low_rows": 8467,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         },
         {
           "epoch": {
@@ -139,13 +146,20 @@
           "hourly_observed_rows": 164206,
           "hourly_overlap_rows": 164206,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007/NTDE_2002-2020_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007/NTDE_2002-2020_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007/NTDE_2002-2020_hourly_residuals.png",
             "fd_high_low": "artifacts/station007_full_test/plots/007/NTDE_2002-2020_fd_high_low.png"
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 79.15056526393579,
-          "fd_high_low_rows": 8467
+          "fd_high_low_rows": 8467,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         },
         {
           "epoch": {
@@ -202,13 +216,20 @@
           "hourly_observed_rows": 173651,
           "hourly_overlap_rows": 173651,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007/IPCC-AR6_1995-2014_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007/IPCC-AR6_1995-2014_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007/IPCC-AR6_1995-2014_hourly_residuals.png",
             "fd_high_low": "artifacts/station007_full_test/plots/007/IPCC-AR6_1995-2014_fd_high_low.png"
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 193.1059757414474,
-          "fd_high_low_rows": 8467
+          "fd_high_low_rows": 8467,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         }
       ]
     },
@@ -279,13 +300,20 @@
           "hourly_observed_rows": 113090,
           "hourly_overlap_rows": 113090,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007a/RECENT_1926-01-01_1939-12-10_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007a/RECENT_1926-01-01_1939-12-10_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007a/RECENT_1926-01-01_1939-12-10_hourly_residuals.png",
             "fd_high_low": null
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 100.08008716188,
-          "fd_high_low_rows": 0
+          "fd_high_low_rows": 0,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         }
       ]
     },
@@ -364,13 +392,20 @@
           "hourly_observed_rows": 165292,
           "hourly_overlap_rows": 165292,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007b/NTDE_1983-2001_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007b/NTDE_1983-2001_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007b/NTDE_1983-2001_hourly_residuals.png",
             "fd_high_low": null
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 191.82050774617693,
-          "fd_high_low_rows": 0
+          "fd_high_low_rows": 0,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         },
         {
           "epoch": {
@@ -427,13 +462,20 @@
           "hourly_observed_rows": 146662,
           "hourly_overlap_rows": 146662,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007b/NTDE_2002-2020_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007b/NTDE_2002-2020_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007b/NTDE_2002-2020_hourly_residuals.png",
             "fd_high_low": null
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 89.0345655547496,
-          "fd_high_low_rows": 0
+          "fd_high_low_rows": 0,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         },
         {
           "epoch": {
@@ -490,13 +532,20 @@
           "hourly_observed_rows": 173651,
           "hourly_overlap_rows": 173651,
           "plots": {
+            "datums": "artifacts/station007_full_test/plots/007b/IPCC-AR6_1995-2014_datums.png",
             "hourly_observed_vs_predicted": "artifacts/station007_full_test/plots/007b/IPCC-AR6_1995-2014_hourly_observed_vs_predicted.png",
             "hourly_residuals": "artifacts/station007_full_test/plots/007b/IPCC-AR6_1995-2014_hourly_residuals.png",
             "fd_high_low": null
           },
           "comparison_window_rows": 744,
           "comparison_window_rmse_mm": 193.1059757414474,
-          "fd_high_low_rows": 0
+          "fd_high_low_rows": 0,
+          "switch_levels": {
+            "station_id": "007",
+            "LEV": 1644.0,
+            "LEVB": 1541.0,
+            "Date": "2023-07-04 08:30:00"
+          }
         }
       ]
     }
