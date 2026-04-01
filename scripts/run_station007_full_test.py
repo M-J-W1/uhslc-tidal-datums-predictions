@@ -23,6 +23,7 @@ from core import (
     fetch_rq_hourly,
     fit_harmonics,
     load_harmonic_result,
+    predict_fd_high_low,
     predict_from_harmonics,
     save_harmonic_result,
     save_netcdf,
@@ -143,7 +144,7 @@ def _run_record(
         harmonics = load_harmonic_result(harmonic_artifacts[ep.name]["pickle"])
         epoch_hourly_pred = predict_from_harmonics(harmonics, ep.start, ep.end, freq="1h")
         datum = compute_datums(sub, epoch_prediction=epoch_hourly_pred)
-        pred_end = cap_prediction_end(pd.Timestamp("2100-12-31 23:00:00") if station_kind == "FD" else ep.end)
+        pred_end = cap_prediction_end(pd.Timestamp("2035-12-31 23:00:00") if station_kind == "FD" else ep.end)
         if pred_end == ep.end:
             hourly_pred = epoch_hourly_pred
         else:
@@ -152,6 +153,11 @@ def _run_record(
         datum_by_epoch[ep.name] = datum
         harmonics_by_epoch[ep.name] = harmonics_summary
         hourly_predictions[ep.name] = hourly_pred
+        if station_kind == "FD":
+            minute_highlow = predict_fd_high_low(harmonics)
+            minute_highlow_by_epoch[ep.name] = minute_highlow
+        else:
+            minute_highlow = pd.DataFrame(columns=["time", "height_mm", "type"])
 
         observed = sub.dropna(subset=["sea_level"])[["time", "sea_level"]].copy()
         within_epoch_pred = epoch_hourly_pred.copy()
@@ -168,7 +174,13 @@ def _run_record(
         )
 
         minute_plot = None
-        minute_rows = 0
+        minute_rows = int(len(minute_highlow))
+        if station_kind == "FD" and not minute_highlow.empty:
+            minute_plot = _plot_fd_high_low(
+                plot_dir / f"{ep.name}_fd_high_low.png",
+                minute_highlow,
+                f"{record_id} {ep.name}: FD high/low minute prediction",
+            )
 
         epoch_summaries.append(
             {
@@ -190,7 +202,7 @@ def _run_record(
                 "fd_high_low_rows": minute_rows,
             }
         )
-        del harmonics, sub, epoch_hourly_pred
+        del harmonics, sub, epoch_hourly_pred, minute_highlow
         gc.collect()
 
     ds = build_netcdf_dataset(

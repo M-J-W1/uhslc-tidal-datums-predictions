@@ -28,6 +28,8 @@ PRIMARY_EPOCHS = [
     ("IPCC-AR6_1995-2014", pd.Timestamp("1995-01-01 00:00:00"), pd.Timestamp("2014-12-31 23:00:00")),
 ]
 MAX_PREDICTION_END = pd.Timestamp("2035-12-31 23:00:00")
+MAX_MINUTE_PREDICTION_START = pd.Timestamp("2025-01-01 00:00:00")
+MAX_MINUTE_PREDICTION_END = pd.Timestamp("2030-12-31 23:59:00")
 
 @dataclass
 class Epoch:
@@ -425,6 +427,23 @@ def extract_daily_high_low_chunked(
     out = pd.concat(rows, ignore_index=True).sort_values('time')
     out = out.drop_duplicates(subset=['time', 'type']).reset_index(drop=True)
     return out[['time', 'height_mm', 'type']]
+
+
+def predict_fd_high_low(
+    harmonics: HarmonicResult,
+    end: pd.Timestamp | None = None,
+    chunk_days: int = 31,
+) -> pd.DataFrame:
+    minute_end = min(pd.Timestamp(end), MAX_MINUTE_PREDICTION_END) if end is not None else MAX_MINUTE_PREDICTION_END
+    minute_start = MAX_MINUTE_PREDICTION_START
+    if minute_end <= minute_start:
+        return pd.DataFrame(columns=['time', 'height_mm', 'type'])
+    return extract_daily_high_low_chunked(
+        harmonics,
+        minute_start,
+        minute_end,
+        chunk_days=chunk_days,
+    )
 
 
 def _round_mm_array(values):

@@ -8,7 +8,7 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, load_harmonic_result, predict_from_harmonics, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result, save_netcdf, strip_harmonic_result
+from core import cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, load_harmonic_result, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result, save_netcdf, strip_harmonic_result
 
 
 class TestTidalCore(unittest.TestCase):
@@ -93,6 +93,22 @@ class TestTidalCore(unittest.TestCase):
         self.assertTrue(len(chunked) >= 8)
         self.assertEqual(set(chunked['type'].unique()), {'H', 'L'})
         self.assertEqual(set(chunked['time'].dt.date.unique()), set(direct['time'].dt.date.unique()))
+
+    def test_predict_fd_high_low(self):
+        df = self.synthetic_hourly(start='2002-01-01 00:00:00', end='2002-03-31 23:00:00')
+        hr = fit_harmonics(df, latitude=21.3)
+        hl = predict_fd_high_low(hr, end=pd.Timestamp('2025-01-03 23:59:00'), chunk_days=2)
+        self.assertTrue(len(hl) >= 8)
+        self.assertEqual(set(hl['type'].unique()), {'H', 'L'})
+        self.assertTrue((hl['time'] >= pd.Timestamp('2025-01-01 00:00:00')).all())
+        self.assertTrue((hl['time'] <= pd.Timestamp('2025-01-03 23:59:00')).all())
+
+    def test_predict_fd_high_low_caps_to_last_minute_of_2030(self):
+        df = self.synthetic_hourly(start='2002-01-01 00:00:00', end='2002-03-31 23:00:00')
+        hr = fit_harmonics(df, latitude=21.3)
+        hl = predict_fd_high_low(hr)
+        self.assertTrue((hl['time'] >= pd.Timestamp('2025-01-01 00:00:00')).all())
+        self.assertTrue((hl['time'] <= pd.Timestamp('2030-12-31 23:59:00')).all())
 
     def test_netcdf_write(self):
         df = self.synthetic_hourly()

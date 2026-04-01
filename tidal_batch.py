@@ -10,13 +10,14 @@ import numpy as np
 from core import (
     cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums,
     fit_harmonics, load_harmonic_result, predict_from_harmonics,
+    predict_fd_high_low,
     build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result,
     save_netcdf, strip_harmonic_result, fetch_fd_hourly, fetch_rq_hourly,
     get_rq_metadata_span
 )
 
 
-def process_df(df, station_id, station_name, station_kind, latitude, output_dir, end_hourly_fd='2100-12-31 23:00:00', include_fd_minute_highlow=False, datums_only=False):
+def process_df(df, station_id, station_name, station_kind, latitude, output_dir, end_hourly_fd='2035-12-31 23:00:00', include_fd_minute_highlow=True, datums_only=False):
     outdir = Path(output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
     df = clean_hourly_dataframe(df)
@@ -66,9 +67,7 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
         else:
             hourly_predictions[ep.name] = predict_from_harmonics(harmonics, ep.start, pred_end, freq='1h')
         if station_kind == 'FD' and include_fd_minute_highlow:
-            minute_end = pd.Timestamp('2030-12-31 23:00:00')
-            if ep.end <= minute_end:
-                pass
+            minute_highlow_by_epoch[ep.name] = predict_fd_high_low(harmonics)
         del harmonics, sub, epoch_prediction
         gc.collect()
 
@@ -115,7 +114,7 @@ def main():
         result = process_df(df, args.station_id, args.station_name, args.station_kind, args.latitude, args.output_dir, datums_only=args.datums_only)
     elif args.mode == 'fd':
         start = args.start or '1800-01-01'
-        end = args.end or '2100-12-31'
+        end = args.end or '2035-12-31'
         df = fetch_fd_hourly(args.station_id, start, end)
         station_name = str(df['station_name'].dropna().iloc[0]) if len(df.dropna(subset=['station_name'])) else args.station_name
         result = process_df(df[['time','sea_level']], args.station_id, station_name, 'FD', args.latitude, args.output_dir, datums_only=args.datums_only)

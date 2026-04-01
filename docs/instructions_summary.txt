@@ -19,7 +19,7 @@ INSTRUCTIONS SUMMARY
 0017: ### Tidal harmonics
 0018: Harmonics should be calculated for each epoch. Include the tidal harmonics in the output file. Follow best practices learned from the legacy software, especially concerning treatment of the nodal cycle and trends.
 0019: ### Tide predictions
-0020: Tide predictions should be calculated for each set of harmonics. For FD stations: Output hourly predictions spanning the epoch start to 2100-12-31 23 hour. Also calculate minute predictions from each epoch end to 2030-12-31 23 hour (FD stations only). To reduce file sizes, only the times and heights of high/low daily tides from the minute predictions should be saved (review the legacy procedure). For the RQ stations: only calculate and save the hourly tide predictions spanning the available epochs (e.g., the prediction for 001a will cover the hours spanning 1969-05-09 to 1971-02-27).   
+0020: Tide predictions should be calculated for each set of harmonics. For FD stations: Output hourly predictions spanning the epoch start to 2035-12-31 23 hour. Also calculate minute predictions from 2025-01-01 00 hour to 2030-12-31 23:59 hour (FD stations only). To reduce file sizes, only the times and heights of high/low daily tides from the minute predictions should be saved (review the legacy procedure). For the RQ stations: only calculate and save the hourly tide predictions spanning the available epochs (e.g., the prediction for 001a will cover the hours spanning 1969-05-09 to 1971-02-27).   
 0021: ### Test stations Run tests on generate plots for the following stations, FD and all RQ versions: 001, 002, 003, and 007 (datums, hourly predictions/residuals, and minute predictions if application).
 0022: ## Legacy software
 0023: ### Datums
@@ -380,7 +380,7 @@ INSTRUCTIONS SUMMARY
 0419:   dir_path = (['/home/kaimoku/mwidlans/Data/SeaLevel/Tidal/v',version,'/']);
 0421:   preStartYr = start_NTDE;
 0422:   %preStartYr = 2020;
-0423:   preEndYr = 2030;
+0423:   preEndYr = 2035;
 0424:   %for station_ct = 1:size(uhidTxt,1)
 0425:   %for station_ct = tide_partial_start:size(uhidTxt,1)  % Station subgroup only
 0426:   for station_ct = tide_partial_start:size(STATION,2)  % rev 12/2/2021
