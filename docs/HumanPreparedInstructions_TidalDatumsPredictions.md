@@ -63,6 +63,15 @@ You do not have access to the switch elevations, so it is acceptable to omit
 them. Otherwise, use the legacy software to determine which datums should be
 calculated and saved.
 
+Current project note:
+
+- The implementation now includes switch elevations where available, using
+  `LEV` and `LEVB` names consistently.
+- These are currently extracted from the interim live `.din` directory and
+  cached into `data/switch_levels.csv`.
+- That source should later be replaced with a more permanent switch-metadata
+  location.
+
 ## Tidal Harmonics
 
 Harmonics should be calculated for each epoch. Include the tidal harmonics in

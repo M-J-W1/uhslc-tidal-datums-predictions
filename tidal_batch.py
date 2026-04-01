@@ -13,7 +13,7 @@ from core import (
     predict_fd_high_low,
     build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result,
     save_netcdf, strip_harmonic_result, fetch_fd_hourly, fetch_rq_hourly,
-    get_station_metadata,
+    get_station_metadata, get_station_switch_levels,
     get_rq_metadata_span
 )
 
@@ -25,6 +25,8 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
     epochs = select_epochs(df)
     if not epochs:
         raise RuntimeError(f'No qualifying epochs found for {station_id}')
+    base_station_id = str(station_id)[:3]
+    switch_levels = get_station_switch_levels(base_station_id)
 
     datum_by_epoch = {}
     harmonics_by_epoch = {}
@@ -73,9 +75,9 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
         gc.collect()
 
     if datums_only:
-        ds = build_datums_only_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch)
+        ds = build_datums_only_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch, switch_levels=switch_levels)
     else:
-        ds = build_netcdf_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch, harmonics_by_epoch, hourly_predictions)
+        ds = build_netcdf_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch, harmonics_by_epoch, hourly_predictions, switch_levels=switch_levels)
     for ep_name, hl in minute_highlow_by_epoch.items():
         if not hl.empty:
             ds[f'fd_highlow_time_{ep_name}'] = ([f'fd_hl_{ep_name}'], hl['time'].to_numpy(dtype='datetime64[ns]'))

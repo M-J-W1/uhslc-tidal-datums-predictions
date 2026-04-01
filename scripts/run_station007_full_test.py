@@ -30,6 +30,7 @@ from core import (
     select_epochs,
     strip_harmonic_result,
     get_station_metadata,
+    get_station_switch_levels,
 )
 
 
@@ -57,7 +58,7 @@ def _plot_hourly_comparison(plot_path: Path, merged: pd.DataFrame, title: str) -
     }
 
 
-def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> str:
+def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, switch_levels, title: str) -> str:
     plot_df = series.dropna(subset=["sea_level"]).head(24 * 31).copy()
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(plot_df["time"], plot_df["sea_level"], color="0.25", linewidth=0.9, label="Observed hourly sea level")
@@ -75,6 +76,13 @@ def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> st
         "MLW": "tab:orange",
         "MLLW": "tab:red",
     }
+    if switch_levels is not None:
+        if switch_levels.LEV is not None:
+            datum_lines["LEV"] = float(switch_levels.LEV)
+            colors["LEV"] = "tab:purple"
+        if switch_levels.LEVB is not None:
+            datum_lines["LEVB"] = float(switch_levels.LEVB)
+            colors["LEVB"] = "tab:brown"
     for name, value in datum_lines.items():
         ax.axhline(value, color=colors[name], linestyle="--", linewidth=1.1, label=f"{name} = {value:.1f} mm")
     ax.set_title(title)
@@ -129,6 +137,7 @@ def _run_record(
     version: str | None = None,
 ) -> dict:
     station_meta = get_station_metadata(station_id)
+    switch_levels = get_station_switch_levels(station_id)
     latitude = station_meta.latitude
     if station_kind == "FD":
         raw = fetch_fd_hourly(station_id)
@@ -197,6 +206,7 @@ def _run_record(
             plot_dir / f"{ep.name}_datums.png",
             sub,
             datum,
+            switch_levels,
             f"{record_id} {ep.name}: tidal datums",
         )
         within_epoch_pred = epoch_hourly_pred.copy()
@@ -240,6 +250,7 @@ def _run_record(
                 "comparison_window_rows": compare_meta["comparison_rows"],
                 "comparison_window_rmse_mm": compare_meta["rmse_mm"],
                 "fd_high_low_rows": minute_rows,
+                "switch_levels": None if switch_levels is None else asdict(switch_levels),
             }
         )
         del harmonics, sub, epoch_hourly_pred, minute_highlow
@@ -253,6 +264,7 @@ def _run_record(
         datum_by_epoch,
         harmonics_by_epoch,
         hourly_predictions,
+        switch_levels=switch_levels,
     )
     for ep_name, hl in minute_highlow_by_epoch.items():
         if not hl.empty:

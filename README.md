@@ -15,6 +15,7 @@ It is prepared for handoff into another repository or another computer.
 ### Core scripts
 - `core.py` — main processing logic
 - `tidal_batch.py` — command-line driver
+- `scripts/update_switch_levels.py` — refresh cached `LEV`/`LEVB` elevations from the live `.din` directory
 - `tests/test_core_unittest.py` — unit tests using `unittest`
 
 ### Documentation
@@ -48,6 +49,7 @@ pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml
 ### Working
 - Unit tests pass for the synthetic/prototype workflow.
 - Real FD ERDDAP loading works.
+- Switch elevations are now cached from the live `.din` metadata directory into `data/switch_levels.csv` and included in NetCDF/plots when available as `LEV` and `LEVB`.
 - Full available FD ERDDAP span for station `001` was confirmed.
 - Real FD prototype outputs were successfully generated earlier for stations `001`, `002`, `003`, and `007` using shorter operational windows.
 - Full RQ ERDDAP spans were confirmed for station `002` versions `A`, `B`, `C`, `D`.
@@ -57,6 +59,7 @@ pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml
 ### Known limitations
 - Full-record end-to-end processing for FD `001` was killed by the OS (`return code -9`), likely due to resource pressure in the current implementation.
 - RQ availability through ERDDAP appears inconsistent for station `001`; live metadata may list versions that are not currently exposed by ERDDAP.
+- The switch-elevation source is still an interim `.din` directory, so this part of the workflow should later be redirected to a more permanent location.
 - The harmonic implementation now matches the core legacy UTide setup more closely, but it is still not a full legacy-equivalent production workflow.
 - The current code should still be monitored for memory pressure during long UTide solves, even though prediction generation now uses persisted harmonic artifacts and chunked FD minute extraction.
 
@@ -89,12 +92,20 @@ python tidal_batch.py --mode fd --station-id 001 --station-kind FD --output-dir 
 python tidal_batch.py --mode rq --station-id 002 --station-kind RQ --version A --output-dir outputs
 ```
 
+### Refresh cached switch elevations
+```bash
+python scripts/update_switch_levels.py
+```
+
 ## Important Notes for the Handoff Repo
 - The current code relies on direct ERDDAP access to:
   - `global_hourly_fast`
   - `global_hourly_rqds`
 - Station inventory, names, coordinates, and RQ version metadata can be loaded from:
   - `https://uhslc.soest.hawaii.edu/data/meta.geojson`
+- Switch elevations (`LEV`, `LEVB`) are loaded from:
+  - `https://uhslc.soest.hawaii.edu/mwidlans/dev/metadata/din/`
+  - and cached locally in `data/switch_levels.csv`, which is only regenerated when older than 30 days
 - If the receiving environment has stricter memory limits, full-record runs may need chunking immediately.
 - The legacy Matlab instructions use UTide with epoch-wide solves, nodal corrections enabled, annual constituents enabled, and trend removed only at prediction time. The Python implementation now follows that same pattern.
 - To reduce long-epoch memory and CPU pressure, the harmonic solve now follows the legacy Matlab `opt = 'nostats'` approach rather than computing UTide confidence intervals.

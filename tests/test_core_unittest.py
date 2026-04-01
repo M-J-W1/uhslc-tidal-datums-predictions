@@ -9,7 +9,7 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import cap_prediction_end, clean_hourly_dataframe, select_epochs, compute_datums, fetch_station_metadata_index, fit_harmonics, get_rq_metadata_span, get_station_metadata, list_rq_versions, load_harmonic_result, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, build_datums_only_dataset, build_netcdf_dataset, save_harmonic_result, save_netcdf, strip_harmonic_result
+from core import SwitchLevel, build_datums_only_dataset, build_netcdf_dataset, cap_prediction_end, clean_hourly_dataframe, compute_datums, fetch_station_metadata_index, fit_harmonics, get_rq_metadata_span, get_station_metadata, list_rq_versions, load_harmonic_result, parse_switch_din, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, save_harmonic_result, save_netcdf, select_epochs, strip_harmonic_result
 
 
 class TestTidalCore(unittest.TestCase):
@@ -35,6 +35,16 @@ class TestTidalCore(unittest.TestCase):
                 }
             ],
         }
+
+    @staticmethod
+    def sample_switch_din_text():
+        return """007MAL       PLAT=07 19.8N LONG=134 27.8E TMZONE=GMT    REF=
+  PRS  RAD  RA2  RA3  LEV  LEB
+    1    1    1    1   60   60
+ 1240 4799 -271 -153 1644 1541
+    0    0    0    0    0    0
+                    Date: 2023-07-04 08:30:00
+"""
 
     @staticmethod
     def synthetic_hourly(start='2002-01-01 00:00:00', end='2002-08-31 23:00:00'):
@@ -117,6 +127,15 @@ class TestTidalCore(unittest.TestCase):
         self.assertEqual(start, pd.Timestamp('1983-01-01 00:00:00'))
         self.assertEqual(end, pd.Timestamp('2018-12-31 00:00:00'))
 
+    def test_parse_switch_din(self):
+        parsed = parse_switch_din(self.sample_switch_din_text())
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.station_id, '007')
+        self.assertEqual(parsed.LEV, 1644.0)
+        self.assertEqual(parsed.LEVB, 1541.0)
+        self.assertEqual(parsed.Date, '2023-07-04 08:30:00')
+
     def test_extract_daily_high_low(self):
         time = pd.date_range('2023-01-01 00:00:00', '2023-01-03 23:59:00', freq='1min')
         minutes = np.arange(len(time), dtype=float)
@@ -160,7 +179,10 @@ class TestTidalCore(unittest.TestCase):
         hr = fit_harmonics(df, latitude=21.3)
         pred = predict_from_harmonics(hr, ep.start, ep.end)
         dat = compute_datums(df, epoch_prediction=pred)
-        ds = build_netcdf_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat}, {ep.name: hr}, {ep.name: pred})
+        switch_levels = SwitchLevel(station_id='001', LEV=1644.0, LEVB=1541.0, Date='2023-07-04 08:30:00')
+        ds = build_netcdf_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat}, {ep.name: hr}, {ep.name: pred}, switch_levels=switch_levels)
+        self.assertIn('LEV', ds.variables)
+        self.assertEqual(float(ds['LEV'].isel(epoch=0).item()), 1644.0)
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'test.nc'
             save_netcdf(ds, str(path))
@@ -176,9 +198,11 @@ class TestTidalCore(unittest.TestCase):
         hr = fit_harmonics(df, latitude=21.3)
         pred = predict_from_harmonics(hr, ep.start, ep.end)
         dat = compute_datums(df, epoch_prediction=pred)
-        ds = build_datums_only_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat})
+        switch_levels = SwitchLevel(station_id='001', LEV=1644.0, LEVB=None, Date='2023-07-04 08:30:00')
+        ds = build_datums_only_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat}, switch_levels=switch_levels)
         self.assertEqual(ds.attrs['content'], 'datums_only')
         self.assertEqual(str(ds['MHHW'].dtype), 'int32')
+        self.assertEqual(float(ds['LEV'].isel(epoch=0).item()), 1644.0)
         self.assertNotIn('harmonic_constituent', ds.variables)
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'test_datums_only.nc'

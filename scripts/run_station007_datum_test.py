@@ -13,13 +13,13 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import clean_hourly_dataframe, compute_datums, fetch_fd_hourly, fetch_rq_hourly, fit_harmonics, get_station_metadata, load_harmonic_result, predict_from_harmonics, save_harmonic_result, select_epochs
+from core import clean_hourly_dataframe, compute_datums, fetch_fd_hourly, fetch_rq_hourly, fit_harmonics, get_station_metadata, get_station_switch_levels, load_harmonic_result, predict_from_harmonics, save_harmonic_result, select_epochs
 
 
 OUTPUT_ROOT = Path("artifacts/station007_datum_test")
 
 
-def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> None:
+def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, switch_levels, title: str) -> None:
     plot_df = series.dropna(subset=["sea_level"]).head(24 * 31).copy()
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(plot_df["time"], plot_df["sea_level"], color="0.25", linewidth=0.9, label="Observed hourly sea level")
@@ -37,6 +37,13 @@ def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> No
         "MLW": "tab:orange",
         "MLLW": "tab:red",
     }
+    if switch_levels is not None:
+        if switch_levels.LEV is not None:
+            datum_lines["LEV"] = float(switch_levels.LEV)
+            colors["LEV"] = "tab:purple"
+        if switch_levels.LEVB is not None:
+            datum_lines["LEVB"] = float(switch_levels.LEVB)
+            colors["LEVB"] = "tab:brown"
     for name, value in datum_lines.items():
         ax.axhline(value, color=colors[name], linestyle="--", linewidth=1.1, label=f"{name} = {value:.1f} mm")
     ax.set_title(title)
@@ -51,6 +58,7 @@ def _plot_datums(plot_path: Path, series: pd.DataFrame, datum, title: str) -> No
 
 def _run_record(station_id: str, station_kind: str, version: str | None = None) -> dict:
     station_meta = get_station_metadata(station_id)
+    switch_levels = get_station_switch_levels(station_id)
     latitude = station_meta.latitude
     if station_kind == "FD":
         raw = fetch_fd_hourly(station_id)
@@ -93,13 +101,14 @@ def _run_record(station_id: str, station_kind: str, version: str | None = None) 
         epoch_prediction = predict_from_harmonics(harmonics, ep.start, ep.end, freq="1h")
         datum = compute_datums(sub, epoch_prediction=epoch_prediction)
         plot_path = plot_dir / f"{ep.name}_datums.png"
-        _plot_datums(plot_path, sub, datum, f"{record_id} {ep.name}: tidal datums")
+        _plot_datums(plot_path, sub, datum, switch_levels, f"{record_id} {ep.name}: tidal datums")
         summaries.append(
             {
                 "epoch": asdict(ep),
                 "datum": asdict(datum),
                 "harmonic_artifact": harmonic_artifact,
                 "plot": str(plot_path),
+                "switch_levels": None if switch_levels is None else asdict(switch_levels),
             }
         )
         del harmonics, sub, epoch_prediction

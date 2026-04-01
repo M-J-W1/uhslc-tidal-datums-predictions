@@ -23,6 +23,8 @@ MISSING_VALUE = -32767
 ERDDAP_BASE = 'https://uhslc.soest.hawaii.edu/erddap/tabledap'
 META_GEOJSON_URL = 'https://uhslc.soest.hawaii.edu/data/meta.geojson'
 RQ_META_INDEX = 'https://uhslc.soest.hawaii.edu/rqds/metadata_yaml/'
+DIN_INDEX_URL = 'https://uhslc.soest.hawaii.edu/mwidlans/dev/metadata/din/'
+SWITCH_LEVELS_CSV = Path(__file__).resolve().parent / 'data' / 'switch_levels.csv'
 PRIMARY_EPOCHS = [
     ("NTDE_1983-2001", pd.Timestamp("1983-01-01 00:00:00"), pd.Timestamp("2001-12-31 23:00:00")),
     ("NTDE_2002-2020", pd.Timestamp("2002-01-01 00:00:00"), pd.Timestamp("2020-12-31 23:00:00")),
@@ -73,6 +75,14 @@ class DatumResult:
     p90_high: float
     p95_high: float
     p99_high: float
+
+
+@dataclass(frozen=True)
+class SwitchLevel:
+    station_id: str
+    LEV: float | None
+    LEVB: float | None
+    Date: str | None
 
 
 @dataclass(frozen=True)
@@ -151,6 +161,163 @@ def _load_json_url(url: str, timeout: int = 240) -> dict:
                 continue
             break
     raise RuntimeError(f'Failed to load JSON from {url}') from last_error
+
+
+def _load_text_url(url: str, timeout: int = 240) -> str:
+    last_error = None
+    for attempt in range(4):
+        try:
+            r = requests.get(url, timeout=timeout)
+            r.raise_for_status()
+            return r.text
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(2 * (attempt + 1))
+                continue
+            break
+    raise RuntimeError(f'Failed to load text from {url}') from last_error
+
+
+def parse_switch_din(text: str) -> SwitchLevel | None:
+    lines = text.splitlines()
+    if not lines:
+        return None
+    station_match = re.match(r'^\s*(\d{3})', lines[0])
+    if station_match is None:
+        return None
+    station_id = station_match.group(1)
+
+    header_idx = None
+    header_tokens: list[str] = []
+    for idx, line in enumerate(lines[1:], start=1):
+        tokens = line.split()
+        if not tokens:
+            continue
+        if any(tok in {'LEV', 'LEB'} for tok in tokens):
+            header_idx = idx
+            header_tokens = tokens
+            break
+        if idx > 8:
+            break
+    if header_idx is None:
+        return None
+
+    numeric_rows: list[list[str]] = []
+    for line in lines[header_idx + 1:]:
+        tokens = line.split()
+        if not tokens:
+            continue
+        if re.match(r'^Date:', tokens[0], re.IGNORECASE):
+            break
+        if len(tokens) >= len(header_tokens) and all(re.match(r'^-?\d+$', tok) for tok in tokens[:len(header_tokens)]):
+            numeric_rows.append(tokens[:len(header_tokens)])
+            if len(numeric_rows) == 3:
+                break
+        elif numeric_rows:
+            break
+    if len(numeric_rows) < 2:
+        return None
+
+    values = numeric_rows[1]
+    lev = None
+    levb = None
+    for idx, token in enumerate(header_tokens):
+        if token == 'LEV':
+            lev = float(values[idx])
+        elif token == 'LEB':
+            levb = float(values[idx])
+
+    date_value = None
+    for line in lines[header_idx + 1:header_idx + 12]:
+        match = re.search(r'Date:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}(?:\s+[0-9]{2}:[0-9]{2}:[0-9]{2})?)', line)
+        if match:
+            date_value = match.group(1).strip()
+            break
+
+    if lev is None and levb is None:
+        return None
+    return SwitchLevel(station_id=station_id, LEV=lev, LEVB=levb, Date=date_value)
+
+
+def fetch_switch_din_filenames() -> list[str]:
+    html = _load_text_url(DIN_INDEX_URL, timeout=120)
+    names = sorted(set(re.findall(r'href="([^"]+\.din)"', html, flags=re.IGNORECASE)))
+    return [name for name in names if name.lower().endswith('.din')]
+
+
+def build_switch_levels_dataframe() -> pd.DataFrame:
+    rows = []
+    for name in fetch_switch_din_filenames():
+        try:
+            text = _load_text_url(f'{DIN_INDEX_URL}{name}', timeout=120)
+            parsed = parse_switch_din(text)
+        except RuntimeError:
+            continue
+        if parsed is None:
+            continue
+        rows.append(
+            {
+                'UHSLC_ID': parsed.station_id,
+                'LEV': parsed.LEV,
+                'LEVB': parsed.LEVB,
+                'Date': parsed.Date,
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=['UHSLC_ID', 'LEV', 'LEVB', 'Date'])
+    df = pd.DataFrame(rows)
+    df['UHSLC_ID'] = df['UHSLC_ID'].astype(str).str.zfill(3)
+    df = df.sort_values('UHSLC_ID').drop_duplicates('UHSLC_ID', keep='first').reset_index(drop=True)
+    return df[['UHSLC_ID', 'LEV', 'LEVB', 'Date']]
+
+
+def ensure_switch_levels_csv(path: Path = SWITCH_LEVELS_CSV, max_age_hours: int = 24 * 30, force: bool = False) -> Path:
+    path = Path(path)
+    refresh = force or (not path.exists())
+    if not refresh:
+        age = pd.Timestamp.utcnow().timestamp() - path.stat().st_mtime
+        refresh = age > (max_age_hours * 3600)
+    if refresh:
+        df = build_switch_levels_dataframe()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path, index=False)
+    return path
+
+
+def load_switch_levels(path: Path = SWITCH_LEVELS_CSV, max_age_hours: int = 24 * 30, force_refresh: bool = False) -> pd.DataFrame:
+    csv_path = ensure_switch_levels_csv(path=path, max_age_hours=max_age_hours, force=force_refresh)
+    if not csv_path.exists():
+        return pd.DataFrame(columns=['UHSLC_ID', 'LEV', 'LEVB', 'Date'])
+    df = pd.read_csv(csv_path, dtype={'UHSLC_ID': str})
+    if 'UHSLC_ID' not in df.columns:
+        return pd.DataFrame(columns=['UHSLC_ID', 'LEV', 'LEVB', 'Date'])
+    if 'SW1' in df.columns and 'LEV' not in df.columns:
+        df = df.rename(columns={'SW1': 'LEV'})
+    if 'SW2' in df.columns and 'LEVB' not in df.columns:
+        df = df.rename(columns={'SW2': 'LEVB'})
+    df['UHSLC_ID'] = df['UHSLC_ID'].astype(str).str.zfill(3)
+    for field in ['LEV', 'LEVB']:
+        if field in df.columns:
+            df[field] = pd.to_numeric(df[field], errors='coerce')
+        else:
+            df[field] = np.nan
+    if 'Date' not in df.columns:
+        df['Date'] = None
+    return df[['UHSLC_ID', 'LEV', 'LEVB', 'Date']]
+
+
+def get_station_switch_levels(station_id: str, path: Path = SWITCH_LEVELS_CSV, max_age_hours: int = 24 * 30, force_refresh: bool = False) -> SwitchLevel | None:
+    sid = str(int(station_id)).zfill(3)
+    df = load_switch_levels(path=path, max_age_hours=max_age_hours, force_refresh=force_refresh)
+    match = df[df['UHSLC_ID'] == sid]
+    if match.empty:
+        return None
+    row = match.iloc[0]
+    lev = row['LEV'] if pd.notna(row['LEV']) else None
+    levb = row['LEVB'] if pd.notna(row['LEVB']) else None
+    date_value = None if pd.isna(row['Date']) else str(row['Date'])
+    return SwitchLevel(station_id=sid, LEV=lev, LEVB=levb, Date=date_value)
 
 
 @lru_cache(maxsize=1)
@@ -517,7 +684,26 @@ def _round_mm_array(values):
     return arr
 
 
-def build_datums_only_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult]) -> xr.Dataset:
+def _attach_switch_levels(ds: xr.Dataset, epochs: List[Epoch], switch_levels: SwitchLevel | None) -> xr.Dataset:
+    if switch_levels is None:
+        lev = np.full(len(epochs), np.nan, dtype=float)
+        levb = np.full(len(epochs), np.nan, dtype=float)
+        switch_date = np.full(len(epochs), '', dtype=object)
+    else:
+        lev_value = np.nan if switch_levels.LEV is None else float(switch_levels.LEV)
+        levb_value = np.nan if switch_levels.LEVB is None else float(switch_levels.LEVB)
+        date_value = '' if not switch_levels.Date else str(switch_levels.Date)
+        lev = np.full(len(epochs), lev_value, dtype=float)
+        levb = np.full(len(epochs), levb_value, dtype=float)
+        switch_date = np.full(len(epochs), date_value, dtype=object)
+
+    ds['LEV'] = xr.DataArray(lev, dims=['epoch'])
+    ds['LEVB'] = xr.DataArray(levb, dims=['epoch'])
+    ds['switch_date'] = xr.DataArray(switch_date, dims=['epoch'])
+    return ds
+
+
+def build_datums_only_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], switch_levels: SwitchLevel | None = None) -> xr.Dataset:
     ds = xr.Dataset(coords={'epoch': [e.name for e in epochs]})
     ds.attrs['station_id'] = station_id
     ds.attrs['station_name'] = station_name
@@ -540,10 +726,10 @@ def build_datums_only_dataset(station_id: str, station_name: str, station_kind: 
     ds['epoch_source'] = xr.DataArray(np.array([e.source for e in epochs], dtype=object), dims=['epoch'])
     ds['epoch_n_expected'] = xr.DataArray(np.array([e.n_expected for e in epochs], dtype=np.int32), dims=['epoch'])
     ds['epoch_n_valid'] = xr.DataArray(np.array([e.n_valid for e in epochs], dtype=np.int32), dims=['epoch'])
-    return ds
+    return _attach_switch_levels(ds, epochs, switch_levels)
 
 
-def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], harmonics_by_epoch: Dict[str, HarmonicResult], hourly_predictions: Dict[str, pd.DataFrame]) -> xr.Dataset:
+def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], harmonics_by_epoch: Dict[str, HarmonicResult], hourly_predictions: Dict[str, pd.DataFrame], switch_levels: SwitchLevel | None = None) -> xr.Dataset:
     epoch_names = [e.name for e in epochs]
     max_const = max((len(harmonics_by_epoch[e].constituent for e in epoch_names)), default=0) if False else max((len(harmonics_by_epoch[e].constituent) for e in epoch_names), default=0)
     const_arr = np.full((len(epoch_names), max_const), '', dtype=object)
@@ -582,7 +768,7 @@ def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, 
         if pred is not None and not pred.empty:
             ds[f'hourly_prediction_{e}'] = xr.DataArray(_round_mm_array(pred['prediction_mm'].to_numpy(dtype=float)), dims=[f'time_{e}'], coords={f'time_{e}': pred['time'].to_numpy(dtype='datetime64[ns]')})
 
-    return ds
+    return _attach_switch_levels(ds, epochs, switch_levels)
 
 
 def save_netcdf(ds: xr.Dataset, path: str) -> None:
