@@ -1,7 +1,8 @@
 # Legacy Harmonic Notes
 
 This note summarizes the harmonic-analysis behavior described in the extracted
-legacy Matlab instructions in [`instructions_extracted.txt`](/home/mwidlansky/UHSLC/DataProcessing/Tidal_Datums_Predictions/docs/instructions_extracted.txt).
+legacy Matlab instructions in [`HumanPreparedInstructions_TidalDatumsPredictions.md`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/HumanPreparedInstructions_TidalDatumsPredictions.md)
+and the raw extracted dump in [`instructions_extracted.txt`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/instructions_extracted.txt).
 
 ## Legacy UTide configuration
 

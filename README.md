@@ -21,7 +21,8 @@ It is prepared for handoff into another repository or another computer.
 - `data/fd_metadata.geojson` — copied from the local IDEA environment because it may not be conveniently available in the target repo/environment
 
 ### Documentation
-- `docs/instructions_extracted.txt` — extracted text from the original instruction document
+- `docs/HumanPreparedInstructions_TidalDatumsPredictions.md` — Markdown transcription of the human-authored instruction document
+- `docs/instructions_extracted.txt` — raw extracted text from the original instruction document
 - `docs/instructions_summary.txt` — line-numbered instruction dump
 - `docs/rq_full_span_probe_001.json` — evidence from RQ ERDDAP probing for station 001
 - `docs/rq_full_span_probe_002.json` — evidence from RQ ERDDAP probing for station 002
