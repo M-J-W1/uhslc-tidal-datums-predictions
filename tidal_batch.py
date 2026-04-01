@@ -8,12 +8,12 @@ import numpy as np
 
 from core import (
     clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics,
-    predict_from_harmonics, extract_daily_high_low, build_netcdf_dataset,
+    predict_from_harmonics, build_netcdf_dataset,
     save_netcdf, fetch_fd_hourly, fetch_rq_hourly, get_rq_metadata_span
 )
 
 
-def process_df(df, station_id, station_name, station_kind, latitude, output_dir, end_hourly_fd='2100-12-31 23:00:00'):
+def process_df(df, station_id, station_name, station_kind, latitude, output_dir, end_hourly_fd='2100-12-31 23:00:00', include_fd_minute_highlow=False):
     outdir = Path(output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
     df = clean_hourly_dataframe(df)
@@ -32,11 +32,10 @@ def process_df(df, station_id, station_name, station_kind, latitude, output_dir,
         harmonics_by_epoch[ep.name] = fit_harmonics(sub, latitude=latitude)
         pred_end = pd.Timestamp(end_hourly_fd) if station_kind == 'FD' else ep.end
         hourly_predictions[ep.name] = predict_from_harmonics(harmonics_by_epoch[ep.name], ep.start, pred_end, freq='1h')
-        if station_kind == 'FD':
+        if station_kind == 'FD' and include_fd_minute_highlow:
             minute_end = pd.Timestamp('2030-12-31 23:00:00')
             if ep.end <= minute_end:
-                minute_df = predict_from_harmonics(harmonics_by_epoch[ep.name], ep.end, minute_end, freq='1min')
-                minute_highlow_by_epoch[ep.name] = extract_daily_high_low(minute_df)
+                pass
 
     ds = build_netcdf_dataset(station_id, station_name, station_kind, epochs, datum_by_epoch, harmonics_by_epoch, hourly_predictions)
     for ep_name, hl in minute_highlow_by_epoch.items():

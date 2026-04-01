@@ -8,7 +8,7 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, predict_from_harmonics, extract_daily_high_low, build_netcdf_dataset, save_netcdf
+from core import clean_hourly_dataframe, select_epochs, compute_datums, fit_harmonics, predict_from_harmonics, extract_daily_high_low, extract_daily_high_low_chunked, build_netcdf_dataset, save_netcdf
 
 
 class TestTidalCore(unittest.TestCase):
@@ -54,6 +54,17 @@ class TestTidalCore(unittest.TestCase):
         hl = extract_daily_high_low(df)
         self.assertTrue(len(hl) >= 6)
         self.assertTrue(set(hl['type'].unique()).issubset({'H','L'}))
+
+    def test_extract_daily_high_low_chunked(self):
+        df = self.synthetic_hourly(start='2002-01-01 00:00:00', end='2002-03-31 23:00:00')
+        hr = fit_harmonics(df, latitude=21.3)
+        start = pd.Timestamp('2002-02-01 00:00:00')
+        end = pd.Timestamp('2002-02-05 23:59:00')
+        direct = extract_daily_high_low(predict_from_harmonics(hr, start, end, freq='1min'))
+        chunked = extract_daily_high_low_chunked(hr, start, end, chunk_days=2)
+        self.assertTrue(len(chunked) >= 8)
+        self.assertEqual(set(chunked['type'].unique()), {'H', 'L'})
+        self.assertEqual(set(chunked['time'].dt.date.unique()), set(direct['time'].dt.date.unique()))
 
     def test_netcdf_write(self):
         df = self.synthetic_hourly()

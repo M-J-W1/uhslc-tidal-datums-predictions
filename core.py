@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 import io
 import re
-import math
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,6 @@ import yaml
 from bs4 import BeautifulSoup
 from scipy.signal import find_peaks
 from utide import solve, reconstruct
-from matplotlib.dates import date2num
 
 MISSING_VALUE = -32767
 ERDDAP_BASE = 'https://uhslc.soest.hawaii.edu/erddap/tabledap'
@@ -229,8 +228,23 @@ def fit_harmonics(df_epoch: pd.DataFrame, latitude: float) -> HarmonicResult:
 
     t = df_epoch['time']
     y_mm = df_epoch['sea_level'].to_numpy(dtype=float)
-    t_num = date2num(t.dt.to_pydatetime())
-    coef = solve(t_num, y_mm, lat=float(latitude), trend=True, method='ols', nodal=True, conf_int='linear', verbose=False)
+    # Legacy Matlab used UTide on epoch datetimes with nodal corrections enabled
+    # and with a linear trend retained in the fit. The Python package can accept
+    # datetime arrays directly; passing matplotlib datenums here causes UTide to
+    # misinterpret the sampling interval and return an empty constituent set.
+    coef = solve(
+        t.to_numpy(),
+        y_mm,
+        lat=float(latitude),
+        trend=True,
+        method='ols',
+        nodal=True,
+        # Legacy Matlab uses UTide with "opt = 'nostats'". Disabling confidence
+        # interval estimation materially reduces memory/CPU pressure on long
+        # epochs while still returning the fitted constituent set.
+        conf_int='none',
+        verbose=False,
+    )
 
     names = [str(c) for c in np.atleast_1d(coef.name)] if hasattr(coef, 'name') else []
     amps = [float(v) for v in np.atleast_1d(coef.A)] if hasattr(coef, 'A') else []
@@ -248,11 +262,19 @@ def predict_from_harmonics(harmonics: HarmonicResult, start: pd.Timestamp, end: 
         return pd.DataFrame({'time': [], 'prediction_mm': []})
     if harmonics.coef is None:
         raise ValueError('UTide coefficients not available for reconstruction.')
-    coef = harmonics.coef
+    coef = copy.deepcopy(harmonics.coef)
     if hasattr(coef, 'slope'):
         coef.slope = 0.0
-    t_num = date2num(time.to_pydatetime())
-    recon = reconstruct(t_num, coef, verbose=False)
+    # With conf_int='none' above, reconstruct cannot rely on SNR-based
+    # filtering. Use the fitted constituent list directly, matching the legacy
+    # "use solved coefficients, zero trend, reconstruct" workflow.
+    recon = reconstruct(
+        time.to_numpy(),
+        coef,
+        constit=np.asarray(harmonics.constituent, dtype=object),
+        min_SNR=0,
+        verbose=False,
+    )
     pred = np.asarray(recon.h, dtype=float)
     return pd.DataFrame({'time': time, 'prediction_mm': pred})
 
@@ -277,6 +299,42 @@ def extract_daily_high_low(minute_pred_df: pd.DataFrame) -> pd.DataFrame:
         lows = grp[grp['type'] == 'L'].nsmallest(2, 'height_mm')
         rows.append(pd.concat([highs, lows]).sort_values('time'))
     out = pd.concat(rows, ignore_index=True).sort_values('time') if rows else pd.DataFrame(columns=['time','height_mm','type','date'])
+    return out[['time', 'height_mm', 'type']]
+
+
+def extract_daily_high_low_chunked(
+    harmonics: HarmonicResult,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    chunk_days: int = 31,
+    pad_hours: int = 18,
+) -> pd.DataFrame:
+    if end < start:
+        return pd.DataFrame(columns=['time', 'height_mm', 'type'])
+
+    rows = []
+    chunk_start = pd.Timestamp(start)
+    final_end = pd.Timestamp(end)
+    pad = pd.Timedelta(hours=pad_hours)
+
+    while chunk_start <= final_end:
+        chunk_end = min(chunk_start + pd.Timedelta(days=chunk_days) - pd.Timedelta(minutes=1), final_end)
+        padded_start = max(start, chunk_start - pad)
+        padded_end = min(final_end, chunk_end + pad)
+        minute_df = predict_from_harmonics(harmonics, padded_start, padded_end, freq='1min')
+        hl = extract_daily_high_low(minute_df)
+        if not hl.empty:
+            chunk_dates = pd.date_range(chunk_start.floor('D'), chunk_end.floor('D'), freq='D')
+            keep_dates = set(chunk_dates.date)
+            keep = hl['time'].dt.date.isin(keep_dates)
+            rows.append(hl.loc[keep].copy())
+        chunk_start = chunk_end + pd.Timedelta(minutes=1)
+
+    if not rows:
+        return pd.DataFrame(columns=['time', 'height_mm', 'type'])
+
+    out = pd.concat(rows, ignore_index=True).sort_values('time')
+    out = out.drop_duplicates(subset=['time', 'type']).reset_index(drop=True)
     return out[['time', 'height_mm', 'type']]
 
 

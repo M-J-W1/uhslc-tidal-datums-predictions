@@ -54,11 +54,12 @@ pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml b
 - Full available FD ERDDAP span for station `001` was confirmed.
 - Real FD prototype outputs were successfully generated earlier for stations `001`, `002`, `003`, and `007` using shorter operational windows.
 - Full RQ ERDDAP spans were confirmed for station `002` versions `A`, `B`, `C`, `D`.
+- Live loader integration tests now pass for station `007` FD and RQ versions `A` and `B`.
 
 ### Known limitations
 - Full-record end-to-end processing for FD `001` was killed by the OS (`return code -9`), likely due to resource pressure in the current implementation.
 - RQ availability through ERDDAP appears inconsistent for station `001`; ERDDAP exposed `001C` but not `001A` or `001B`, even though the YAML metadata index lists those versions.
-- The harmonic implementation is still prototype-level and not yet a full legacy-equivalent production workflow.
+- The harmonic implementation now matches the core legacy UTide setup more closely, but it is still not a full legacy-equivalent production workflow.
 - The current code should be refactored for memory-safe full-record processing before production use.
 
 ## Recommended Next Refactors
@@ -72,7 +73,12 @@ pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml b
 
 ### Run unit tests
 ```bash
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
+```
+
+### Run live station 007 loader integration test
+```bash
+RUN_LIVE_UHSLC=1 MPLCONFIGDIR=/tmp/mplconfig python3 -m unittest tests.test_live_station007 -v
 ```
 
 ### FD example
@@ -91,6 +97,9 @@ python tidal_batch.py   --mode rq   --station-id 002   --station-name "Tarawa, B
   - `global_hourly_fast`
   - `global_hourly_rqds`
 - If the receiving environment has stricter memory limits, full-record runs may need chunking immediately.
+- The legacy Matlab instructions use UTide with epoch-wide solves, nodal corrections enabled, annual constituents enabled, and trend removed only at prediction time. The Python implementation now follows that same pattern.
+- To reduce long-epoch memory and CPU pressure, the harmonic solve now follows the legacy Matlab `opt = 'nostats'` approach rather than computing UTide confidence intervals.
+- For Python `utide`, pass datetime arrays directly into `solve()` and `reconstruct()`. Passing Matplotlib day numbers without an explicit epoch can yield empty constituent sets and invalid sampling diagnostics.
 
 ## Source Context
 This package was assembled from work performed in an IDEA/SEA environment and is intended as a **prototype handoff**, not a final production release.
