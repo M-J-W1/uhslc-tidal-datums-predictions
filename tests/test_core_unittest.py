@@ -9,7 +9,7 @@ import xarray as xr
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import SwitchLevel, build_datums_only_dataset, build_netcdf_dataset, cap_prediction_end, clean_hourly_dataframe, compute_datums, fetch_station_metadata_index, fit_harmonics, get_rq_metadata_span, get_station_metadata, list_rq_versions, load_harmonic_result, parse_switch_din, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, save_harmonic_result, save_netcdf, select_epochs, strip_harmonic_result
+from core import SwitchLevel, build_datums_only_dataset, build_netcdf_dataset, build_netcdf_skill_text, cap_prediction_end, clean_hourly_dataframe, compute_datums, fetch_station_metadata_index, fit_harmonics, get_rq_metadata_span, get_station_metadata, list_rq_versions, load_harmonic_result, parse_switch_din, predict_from_harmonics, predict_fd_high_low, extract_daily_high_low, extract_daily_high_low_chunked, save_harmonic_result, save_netcdf, select_epochs, strip_harmonic_result
 
 
 class TestTidalCore(unittest.TestCase):
@@ -182,6 +182,9 @@ class TestTidalCore(unittest.TestCase):
         switch_levels = SwitchLevel(station_id='001', LEV=1644.0, LEVB=1541.0, Date='2023-07-04 08:30:00')
         ds = build_netcdf_dataset('001', 'Test Station', 'RQ', epochs, {ep.name: dat}, {ep.name: hr}, {ep.name: pred}, switch_levels=switch_levels)
         self.assertIn('LEV', ds.variables)
+        self.assertIn('skill', ds.variables)
+        self.assertEqual(ds.attrs['skill_format'], 'open-skill-markdown')
+        self.assertIn('Epoch Selection', ds['skill'].item())
         self.assertEqual(float(ds['LEV'].isel(epoch=0).item()), 1644.0)
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'test.nc'
@@ -203,11 +206,20 @@ class TestTidalCore(unittest.TestCase):
         self.assertEqual(ds.attrs['content'], 'datums_only')
         self.assertEqual(str(ds['MHHW'].dtype), 'int32')
         self.assertEqual(float(ds['LEV'].isel(epoch=0).item()), 1644.0)
+        self.assertIn('skill', ds.variables)
+        self.assertIn('LEV', ds['skill'].item())
         self.assertNotIn('harmonic_constituent', ds.variables)
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / 'test_datums_only.nc'
             save_netcdf(ds, str(path))
             self.assertTrue(path.exists())
+
+    def test_skill_text_format(self):
+        skill = build_netcdf_skill_text()
+        self.assertTrue(skill.startswith('---\nname: uhslc-tidal-datums-predictions'))
+        self.assertIn('## Epoch Selection', skill)
+        self.assertIn('## Edge Cases', skill)
+        self.assertIn('1982-2000', skill)
 
 
 if __name__ == '__main__':

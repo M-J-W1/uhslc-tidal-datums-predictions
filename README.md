@@ -50,6 +50,7 @@ pip install numpy pandas xarray netCDF4 scipy matplotlib utide requests pyyaml
 - Unit tests pass for the synthetic/prototype workflow.
 - Real FD ERDDAP loading works.
 - Switch elevations are now cached from the live `.din` metadata directory into `data/switch_levels.csv` and included in NetCDF/plots when available as `LEV` and `LEVB`.
+- NetCDF outputs now include an embedded Open Skill-style Markdown variable named `skill` to guide downstream LLM services on how to recreate the vetted products from source data.
 - Full available FD ERDDAP span for station `001` was confirmed.
 - Real FD prototype outputs were successfully generated earlier for stations `001`, `002`, `003`, and `007` using shorter operational windows.
 - Full RQ ERDDAP spans were confirmed for station `002` versions `A`, `B`, `C`, `D`.
@@ -106,6 +107,9 @@ python scripts/update_switch_levels.py
 - Switch elevations (`LEV`, `LEVB`) are loaded from:
   - `https://uhslc.soest.hawaii.edu/mwidlans/dev/metadata/din/`
   - and cached locally in `data/switch_levels.csv`, which is only regenerated when older than 30 days
+- NetCDF outputs also include:
+  - `skill` — a scalar Markdown variable in Open Skill format
+  - `skill_format`, `skill_name`, `skill_version` — global attributes describing the embedded skill
 - If the receiving environment has stricter memory limits, full-record runs may need chunking immediately.
 - The legacy Matlab instructions use UTide with epoch-wide solves, nodal corrections enabled, annual constituents enabled, and trend removed only at prediction time. The Python implementation now follows that same pattern.
 - To reduce long-epoch memory and CPU pressure, the harmonic solve now follows the legacy Matlab `opt = 'nostats'` approach rather than computing UTide confidence intervals.

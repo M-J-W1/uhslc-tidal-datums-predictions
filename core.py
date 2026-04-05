@@ -97,6 +97,135 @@ class StationMetadata:
     rq_versions: dict
 
 
+def build_netcdf_skill_text() -> str:
+    return """---
+name: uhslc-tidal-datums-predictions
+description: Recreate UHSLC tidal datums, harmonics, and predictions from original hourly station data using the vetted project workflow.
+---
+
+This skill explains how to reproduce the tidal datums and tide-prediction products contained in this NetCDF from the original source data.
+
+## Scope
+
+Use this skill when recreating:
+
+- epoch selection
+- datum calculation
+- harmonic fitting
+- hourly tide prediction generation
+- FD minute high/low extraction
+- switch elevation handling
+- standard-epoch versus fallback-epoch decisions
+
+## Inputs
+
+Required inputs:
+
+- hourly sea level observations in station-zero units
+- station id
+- station kind: FD or RQ
+- station latitude
+- switch elevations when available
+
+Use GMT timestamps. Use millimeters for exported datum and prediction values.
+
+## Epoch Selection
+
+Primary standard epochs are:
+
+- NTDE_1983-2001
+- NTDE_2002-2020
+- IPCC-AR6_1995-2014
+
+Rules:
+
+- clean the hourly series first
+- drop duplicate timestamps
+- treat missing sentinel values as null
+- compute hourly completeness over each candidate epoch
+- accept a standard epoch when at least 75 percent of expected hourly values are present
+- keep at most three epochs
+
+If no standard epoch qualifies:
+
+- require at least about six months of valid hourly data
+- define one most-recent fallback epoch
+- do not exceed 19 years
+- label it as a recent/custom epoch instead of silently relabeling it as a standard epoch
+
+## Datums
+
+Compute datums from observed hourly sea level within the selected epoch:
+
+- MHW and MLW: all local maxima/minima with at least 6 hours separation
+- MHHW and MLLW: tidal-day windows of 24 hours 50 minutes
+- DTL = (MHHW + MLLW) / 2
+- MTL = (MHW + MLW) / 2
+- MSL: mean of observed hourly sea level
+- GT = MHHW - MLLW
+- MN = MHW - MLW
+- DHQ = MHHW - MHW
+- DLQ = MLW - MLLW
+
+HAT and LAT should come from the harmonic tide prediction over the epoch, not directly from observations.
+
+The percentile fields in this project are based on observed hourly sea level during the epoch in station-zero units.
+
+## Harmonic Analysis
+
+Fit harmonics over the full epoch in one solve using UTide-style harmonic analysis.
+
+Guidance:
+
+- use the station latitude
+- keep nodal corrections enabled
+- retain the linear trend in the solve
+- disable confidence-interval estimation for the solve when mirroring the legacy nostats workflow
+- do not mutate the fitted coefficients in place
+
+The harmonic summary saved in the NetCDF is not by itself sufficient for later prediction unless the reconstructable harmonic state is also preserved elsewhere.
+
+## Tide Predictions
+
+Hourly predictions:
+
+- FD: predict from epoch start through 2035-12-31 23:00
+- RQ: predict only over the available epoch
+
+FD minute predictions:
+
+- generate minute predictions from 2025-01-01 00:00 through 2030-12-31 23:59
+- save only extracted daily high/low event times and heights
+
+When reconstructing predictions from harmonics:
+
+- use the fitted constituent set
+- remove trend during reconstruction
+- preserve the original fit object for reuse
+
+## Switch Elevations
+
+Switch elevations are optional station metadata:
+
+- LEV: Switch 1 elevation
+- LEVB: Switch 2 elevation
+
+When available, include LEV and LEVB in the NetCDF and datum plots.
+
+These values are currently derived from the most-current top switch row in the station .din metadata file and cached in switch_levels.csv.
+
+## Edge Cases
+
+For a case like 1982-2000 versus the standard NTDE_1983-2001:
+
+- prefer the standard named epoch when it qualifies and the goal is comparability to published standard epochs
+- prefer a nonstandard continuous epoch when the goal is the best stable harmonic fit from the available data and the span materially improves the fit
+- if a nonstandard span is chosen, label it explicitly as a recent/custom epoch rather than presenting it as the standard epoch
+
+This means there can be reasonable disagreement in edge cases, but the dataset should always make the selected span explicit and reproducible.
+"""
+
+
 def cap_prediction_end(end: pd.Timestamp) -> pd.Timestamp:
     return min(pd.Timestamp(end), MAX_PREDICTION_END)
 
@@ -703,6 +832,15 @@ def _attach_switch_levels(ds: xr.Dataset, epochs: List[Epoch], switch_levels: Sw
     return ds
 
 
+def _attach_skill(ds: xr.Dataset) -> xr.Dataset:
+    skill_text = build_netcdf_skill_text()
+    ds['skill'] = xr.DataArray(np.array(skill_text, dtype=object))
+    ds.attrs['skill_format'] = 'open-skill-markdown'
+    ds.attrs['skill_name'] = 'uhslc-tidal-datums-predictions'
+    ds.attrs['skill_version'] = '1'
+    return ds
+
+
 def build_datums_only_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], switch_levels: SwitchLevel | None = None) -> xr.Dataset:
     ds = xr.Dataset(coords={'epoch': [e.name for e in epochs]})
     ds.attrs['station_id'] = station_id
@@ -726,7 +864,8 @@ def build_datums_only_dataset(station_id: str, station_name: str, station_kind: 
     ds['epoch_source'] = xr.DataArray(np.array([e.source for e in epochs], dtype=object), dims=['epoch'])
     ds['epoch_n_expected'] = xr.DataArray(np.array([e.n_expected for e in epochs], dtype=np.int32), dims=['epoch'])
     ds['epoch_n_valid'] = xr.DataArray(np.array([e.n_valid for e in epochs], dtype=np.int32), dims=['epoch'])
-    return _attach_switch_levels(ds, epochs, switch_levels)
+    ds = _attach_switch_levels(ds, epochs, switch_levels)
+    return _attach_skill(ds)
 
 
 def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, epochs: List[Epoch], datum_by_epoch: Dict[str, DatumResult], harmonics_by_epoch: Dict[str, HarmonicResult], hourly_predictions: Dict[str, pd.DataFrame], switch_levels: SwitchLevel | None = None) -> xr.Dataset:
@@ -768,7 +907,8 @@ def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, 
         if pred is not None and not pred.empty:
             ds[f'hourly_prediction_{e}'] = xr.DataArray(_round_mm_array(pred['prediction_mm'].to_numpy(dtype=float)), dims=[f'time_{e}'], coords={f'time_{e}': pred['time'].to_numpy(dtype='datetime64[ns]')})
 
-    return _attach_switch_levels(ds, epochs, switch_levels)
+    ds = _attach_switch_levels(ds, epochs, switch_levels)
+    return _attach_skill(ds)
 
 
 def save_netcdf(ds: xr.Dataset, path: str) -> None:

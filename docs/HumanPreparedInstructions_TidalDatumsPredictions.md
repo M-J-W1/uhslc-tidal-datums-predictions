@@ -16,6 +16,12 @@ cover groups of stations: all, FD, RQ, subsets, or individual stations.
 - NetCDF
 - One file per station record
 
+Current project note:
+
+- NetCDF outputs may also include an embedded Open Skill-style Markdown
+  variable describing how an LLM service should recreate the vetted products
+  from the original station data while preserving established methods.
+
 Examples:
 
 - `001`
