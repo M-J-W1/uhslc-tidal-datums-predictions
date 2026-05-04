@@ -128,6 +128,6 @@ Plot types:
 The original instruction package also included legacy Matlab examples and notes
 used to guide the Python implementation. Those remain available in:
 
-- [`instructions_extracted.txt`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/instructions_extracted.txt)
-- [`instructions_summary.txt`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/instructions_summary.txt)
-- [`legacy_harmonic_notes.md`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/legacy_harmonic_notes.md)
+- [`instructions_extracted.txt`](instructions_extracted.txt)
+- [`instructions_summary.txt`](instructions_summary.txt)
+- [`legacy_harmonic_notes.md`](legacy_harmonic_notes.md)

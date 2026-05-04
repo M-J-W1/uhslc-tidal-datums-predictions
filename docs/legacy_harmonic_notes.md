@@ -1,8 +1,8 @@
 # Legacy Harmonic Notes
 
 This note summarizes the harmonic-analysis behavior described in the extracted
-legacy Matlab instructions in [`HumanPreparedInstructions_TidalDatumsPredictions.md`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/HumanPreparedInstructions_TidalDatumsPredictions.md)
-and the raw extracted dump in [`instructions_extracted.txt`](/home/mwidlansky/UHSLC/uhslc-tidal-datums-predictions/docs/instructions_extracted.txt).
+legacy Matlab instructions in [`HumanPreparedInstructions_TidalDatumsPredictions.md`](HumanPreparedInstructions_TidalDatumsPredictions.md)
+and the raw extracted dump in [`instructions_extracted.txt`](instructions_extracted.txt).
 
 ## Legacy UTide configuration
 
@@ -43,7 +43,7 @@ project, that caused UTide to misread the sampling interval, emit divide-by-zero
 
 ## Current project status
 
-The code in [`core.py`](/home/mwidlansky/UHSLC/DataProcessing/Tidal_Datums_Predictions/core.py) now follows the legacy pattern above for:
+The code in [`core.py`](../core.py) now follows the legacy pattern above for:
 
 - harmonic fitting
 - trend-free reconstruction for predictions
