@@ -1,0 +1,134 @@
+---
+name: uhslc-tidal-datums-predictions
+description: Recreate UHSLC tidal datums, harmonics, and predictions from original hourly station data using the vetted project workflow.
+---
+
+This skill explains how to reproduce the tidal datums and tide-prediction products contained in a UHSLC NetCDF from the original source data.
+
+## Scope
+
+Use this skill when recreating:
+
+- epoch selection
+- datum calculation
+- harmonic fitting
+- hourly tide prediction generation
+- FD minute high/low extraction
+- switch elevation handling
+- standard-epoch versus fallback-epoch decisions
+
+## Inputs
+
+Required inputs:
+
+- hourly sea level observations in station-zero units
+- station id
+- station kind: FD or RQ
+- station latitude
+- switch elevations when available
+
+Use GMT timestamps. Use millimeters for exported datum and prediction values.
+
+## Epoch Selection
+
+Primary standard epochs are:
+
+- NTDE_1983-2001
+- NTDE_2002-2020
+- IPCC-AR6_1995-2014
+
+Rules:
+
+- clean the hourly series first
+- drop duplicate timestamps
+- treat missing sentinel values as null
+- compute hourly completeness over each candidate epoch
+- accept a standard epoch when at least 75 percent of expected hourly values are present
+- keep at most three epochs
+
+Prediction-specific epoch:
+
+- after accepting standard epochs, check whether any accepted standard epoch has at least 75 percent hourly completion in every calendar year within that epoch
+- if none of the accepted standard epochs meets that annual criterion, add one `PRED_YYYY_YYYY` epoch when a 19-calendar-year window can meet at least 75 percent hourly completion in every year
+- use `source = prediction` and `role = harmonic_prediction` for `PRED_YYYY_YYYY`
+- keep the standard `NTDE_*` or `IPCC-AR6_*` epoch for datum comparability; the `PRED_*` epoch exists to support a better-conditioned harmonic fit for tide prediction
+- this is rare, but a station record may therefore have up to four epochs
+
+If no standard epoch qualifies:
+
+- require at least about six months of valid hourly data
+- define one most-recent fallback epoch
+- do not exceed 19 years
+- label it as a recent/custom epoch instead of silently relabeling it as a standard epoch
+
+## Datums
+
+Compute datums from observed hourly sea level within the selected epoch:
+
+- MHW and MLW: all local maxima/minima with at least 6 hours separation
+- MHHW and MLLW: tidal-day windows of 24 hours 50 minutes
+- DTL = (MHHW + MLLW) / 2
+- MTL = (MHW + MLW) / 2
+- MSL: mean of observed hourly sea level
+- GT = MHHW - MLLW
+- MN = MHW - MLW
+- DHQ = MHHW - MHW
+- DLQ = MLW - MLLW
+
+HAT and LAT should come from the harmonic tide prediction over the epoch, not directly from observations.
+
+The percentile fields in this project are based on observed hourly sea level during the epoch in station-zero units.
+
+## Harmonic Analysis
+
+Fit harmonics over the full epoch in one solve using UTide-style harmonic analysis.
+
+Guidance:
+
+- use the station latitude
+- keep nodal corrections enabled
+- retain the linear trend in the solve
+- disable confidence-interval estimation for the solve when mirroring the legacy nostats workflow
+- do not mutate the fitted coefficients in place
+
+The harmonic summary saved in the NetCDF is not by itself sufficient for later prediction unless the reconstructable harmonic state is also preserved elsewhere.
+
+## Tide Predictions
+
+Hourly predictions:
+
+- FD: predict from epoch start through 2035-12-31 23:00
+- RQ: predict only over the available epoch
+
+FD minute predictions:
+
+- generate minute predictions from 2025-01-01 00:00 through 2030-12-31 23:59
+- save only extracted daily high/low event times and heights
+
+When reconstructing predictions from harmonics:
+
+- use the fitted constituent set
+- remove trend during reconstruction
+- preserve the original fit object for reuse
+
+## Switch Elevations
+
+Switch elevations are optional station metadata:
+
+- LEV: Switch 1 elevation
+- LEVB: Switch 2 elevation
+
+When available, include LEV and LEVB in the NetCDF and datum plots.
+
+These values are currently derived from the most-current top switch row in the station .din metadata file and cached in switch_levels.csv.
+
+## Edge Cases
+
+For a case like 1982-2000 versus the standard NTDE_1983-2001:
+
+- prefer the standard named epoch when it qualifies and the goal is comparability to published standard epochs
+- prefer a nonstandard continuous epoch when the goal is the best stable harmonic fit from the available data and the span materially improves the fit
+- if `NTDE_1983-2001` passes total completion but lacks at least 75 percent completion in every year, and `1982-2000` meets that annual threshold in every year, include both `NTDE_1983-2001` and `PRED_1982_2000`
+- if a nonstandard span is chosen, label it explicitly as a recent/custom or prediction epoch rather than presenting it as the standard epoch
+
+This means there can be reasonable disagreement in edge cases, but the dataset should always make the selected span explicit and reproducible.
