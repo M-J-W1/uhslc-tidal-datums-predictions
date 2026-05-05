@@ -1,10 +1,12 @@
 .codex
 .venv/
 artifacts/*
-!artifacts/station007_full_test/
-!artifacts/station007_full_test/**
-!artifacts/station002_full_test/
-!artifacts/station002_full_test/**
+!artifacts/skills/
+!artifacts/skills/**
+!artifacts/full_test/
+!artifacts/full_test/**
+!artifacts/datum_test/
+!artifacts/datum_test/**
 __pycache__/
 .pytest_cache/
 *.pyc

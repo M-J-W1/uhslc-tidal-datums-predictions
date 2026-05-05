@@ -18,9 +18,9 @@ cover groups of stations: all, FD, RQ, subsets, or individual stations.
 
 Current project note:
 
-- NetCDF outputs may also include an embedded Open Skill-style Markdown
-  variable describing how an LLM service should recreate the vetted products
-  from the original station data while preserving established methods.
+- NetCDF outputs may also include Skill discovery attributes that identify the
+  Skill name, description, and local/remote location. The Skill itself lives in
+  `artifacts/skills/uhslc-tidal-datums-predictions/SKILL.md`.
 
 Examples:
 
@@ -53,11 +53,18 @@ Rules:
 
 - Use a 75% hourly-data completion criterion.
 - If a particular epoch is below 75% coverage, skip it.
+- If at least one primary epoch qualifies by total completion, but none of the
+  qualifying primary epochs has at least 75% hourly-data completion in every
+  calendar year within the epoch, add one prediction-specific 19-calendar-year
+  epoch named `PRED_YYYY_YYYY` when such a window has at least 75% completion
+  in every year. This preserves the standard epoch for datum comparability
+  while allowing a better-conditioned harmonic fit for predictions.
 - For all records with at least 6 months of hourly data and more than 75%
   completion, define at least one epoch.
 - That fallback epoch should be the most recent data span, not to exceed 19
   years.
-- No station should have more than three epochs.
+- Most station records should have no more than three epochs. Rare edge cases
+  may have a fourth `PRED_YYYY_YYYY` epoch.
 
 Example:
 

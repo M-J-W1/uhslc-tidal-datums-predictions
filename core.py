@@ -25,6 +25,9 @@ META_GEOJSON_URL = 'https://uhslc.soest.hawaii.edu/data/meta.geojson'
 RQ_META_INDEX = 'https://uhslc.soest.hawaii.edu/rqds/metadata_yaml/'
 DIN_INDEX_URL = 'https://uhslc.soest.hawaii.edu/mwidlans/dev/metadata/din/'
 SWITCH_LEVELS_CSV = Path(__file__).resolve().parent / 'data' / 'switch_levels.csv'
+SKILL_RELATIVE_PATH = Path('artifacts') / 'skills' / 'uhslc-tidal-datums-predictions' / 'SKILL.md'
+SKILL_PATH = Path(__file__).resolve().parent / SKILL_RELATIVE_PATH
+SKILL_REMOTE_URL = 'https://raw.githubusercontent.com/uhsealevelcenter/uhslc-tidal-datums-predictions/skills/artifacts/skills/uhslc-tidal-datums-predictions/SKILL.md'
 PRIMARY_EPOCHS = [
     ("NTDE_1983-2001", pd.Timestamp("1983-01-01 00:00:00"), pd.Timestamp("2001-12-31 23:00:00")),
     ("NTDE_2002-2020", pd.Timestamp("2002-01-01 00:00:00"), pd.Timestamp("2020-12-31 23:00:00")),
@@ -43,6 +46,7 @@ class Epoch:
     completion_fraction: float
     n_expected: int
     n_valid: int
+    role: str = 'datum'
 
 @dataclass
 class HarmonicResult:
@@ -97,133 +101,41 @@ class StationMetadata:
     rq_versions: dict
 
 
+@dataclass(frozen=True)
+class SkillReference:
+    name: str
+    description: str
+    local_path: str
+    remote_url: str
+    format: str = 'open-skill-markdown'
+
+
 def build_netcdf_skill_text() -> str:
-    return """---
-name: uhslc-tidal-datums-predictions
-description: Recreate UHSLC tidal datums, harmonics, and predictions from original hourly station data using the vetted project workflow.
----
+    return SKILL_PATH.read_text(encoding='utf-8')
 
-This skill explains how to reproduce the tidal datums and tide-prediction products contained in this NetCDF from the original source data.
 
-## Scope
+def _parse_skill_frontmatter(skill_text: str) -> dict:
+    if not skill_text.startswith('---\n'):
+        raise ValueError(f'Skill file is missing YAML frontmatter: {SKILL_RELATIVE_PATH}')
+    parts = skill_text.split('---', 2)
+    if len(parts) < 3:
+        raise ValueError(f'Skill file has malformed YAML frontmatter: {SKILL_RELATIVE_PATH}')
+    metadata = yaml.safe_load(parts[1]) or {}
+    if not metadata.get('name') or not metadata.get('description'):
+        raise ValueError(f'Skill frontmatter requires name and description: {SKILL_RELATIVE_PATH}')
+    return metadata
 
-Use this skill when recreating:
 
-- epoch selection
-- datum calculation
-- harmonic fitting
-- hourly tide prediction generation
-- FD minute high/low extraction
-- switch elevation handling
-- standard-epoch versus fallback-epoch decisions
-
-## Inputs
-
-Required inputs:
-
-- hourly sea level observations in station-zero units
-- station id
-- station kind: FD or RQ
-- station latitude
-- switch elevations when available
-
-Use GMT timestamps. Use millimeters for exported datum and prediction values.
-
-## Epoch Selection
-
-Primary standard epochs are:
-
-- NTDE_1983-2001
-- NTDE_2002-2020
-- IPCC-AR6_1995-2014
-
-Rules:
-
-- clean the hourly series first
-- drop duplicate timestamps
-- treat missing sentinel values as null
-- compute hourly completeness over each candidate epoch
-- accept a standard epoch when at least 75 percent of expected hourly values are present
-- keep at most three epochs
-
-If no standard epoch qualifies:
-
-- require at least about six months of valid hourly data
-- define one most-recent fallback epoch
-- do not exceed 19 years
-- label it as a recent/custom epoch instead of silently relabeling it as a standard epoch
-
-## Datums
-
-Compute datums from observed hourly sea level within the selected epoch:
-
-- MHW and MLW: all local maxima/minima with at least 6 hours separation
-- MHHW and MLLW: tidal-day windows of 24 hours 50 minutes
-- DTL = (MHHW + MLLW) / 2
-- MTL = (MHW + MLW) / 2
-- MSL: mean of observed hourly sea level
-- GT = MHHW - MLLW
-- MN = MHW - MLW
-- DHQ = MHHW - MHW
-- DLQ = MLW - MLLW
-
-HAT and LAT should come from the harmonic tide prediction over the epoch, not directly from observations.
-
-The percentile fields in this project are based on observed hourly sea level during the epoch in station-zero units.
-
-## Harmonic Analysis
-
-Fit harmonics over the full epoch in one solve using UTide-style harmonic analysis.
-
-Guidance:
-
-- use the station latitude
-- keep nodal corrections enabled
-- retain the linear trend in the solve
-- disable confidence-interval estimation for the solve when mirroring the legacy nostats workflow
-- do not mutate the fitted coefficients in place
-
-The harmonic summary saved in the NetCDF is not by itself sufficient for later prediction unless the reconstructable harmonic state is also preserved elsewhere.
-
-## Tide Predictions
-
-Hourly predictions:
-
-- FD: predict from epoch start through 2035-12-31 23:00
-- RQ: predict only over the available epoch
-
-FD minute predictions:
-
-- generate minute predictions from 2025-01-01 00:00 through 2030-12-31 23:59
-- save only extracted daily high/low event times and heights
-
-When reconstructing predictions from harmonics:
-
-- use the fitted constituent set
-- remove trend during reconstruction
-- preserve the original fit object for reuse
-
-## Switch Elevations
-
-Switch elevations are optional station metadata:
-
-- LEV: Switch 1 elevation
-- LEVB: Switch 2 elevation
-
-When available, include LEV and LEVB in the NetCDF and datum plots.
-
-These values are currently derived from the most-current top switch row in the station .din metadata file and cached in switch_levels.csv.
-
-## Edge Cases
-
-For a case like 1982-2000 versus the standard NTDE_1983-2001:
-
-- prefer the standard named epoch when it qualifies and the goal is comparability to published standard epochs
-- prefer a nonstandard continuous epoch when the goal is the best stable harmonic fit from the available data and the span materially improves the fit
-- if a nonstandard span is chosen, label it explicitly as a recent/custom epoch rather than presenting it as the standard epoch
-
-This means there can be reasonable disagreement in edge cases, but the dataset should always make the selected span explicit and reproducible.
-"""
+@lru_cache(maxsize=1)
+def get_netcdf_skill_reference() -> SkillReference:
+    skill_text = build_netcdf_skill_text()
+    metadata = _parse_skill_frontmatter(skill_text)
+    return SkillReference(
+        name=str(metadata['name']),
+        description=str(metadata['description']),
+        local_path=SKILL_RELATIVE_PATH.as_posix(),
+        remote_url=SKILL_REMOTE_URL,
+    )
 
 
 def cap_prediction_end(end: pd.Timestamp) -> pd.Timestamp:
@@ -506,6 +418,55 @@ def epoch_completion(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -
     return expected, valid, fraction
 
 
+def annual_completion_fractions(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> List[float]:
+    fractions = []
+    for year in range(start.year, end.year + 1):
+        year_start = max(pd.Timestamp(year=year, month=1, day=1), start)
+        year_end = min(pd.Timestamp(year=year, month=12, day=31, hour=23), end)
+        expected, _valid_n, frac = epoch_completion(df, year_start, year_end)
+        if expected:
+            fractions.append(frac)
+    return fractions
+
+
+def has_minimum_annual_completion(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, min_fraction: float) -> bool:
+    fractions = annual_completion_fractions(df, start, end)
+    return bool(fractions) and all(frac >= min_fraction for frac in fractions)
+
+
+def select_prediction_epoch(df: pd.DataFrame, min_annual_fraction: float = 0.75) -> Epoch | None:
+    valid = df.dropna(subset=['sea_level'])
+    if valid.empty:
+        return None
+
+    first_year = int(valid['time'].min().year)
+    last_year = int(valid['time'].max().year)
+    best = None
+    for start_year in range(first_year, last_year - 17):
+        start = pd.Timestamp(year=start_year, month=1, day=1)
+        end = pd.Timestamp(year=start_year + 18, month=12, day=31, hour=23)
+        if not has_minimum_annual_completion(df, start, end, min_annual_fraction):
+            continue
+        expected, valid_n, frac = epoch_completion(df, start, end)
+        candidate = (frac, valid_n, end, start, expected)
+        if best is None or candidate > best:
+            best = candidate
+
+    if best is None:
+        return None
+    frac, valid_n, end, start, expected = best
+    return Epoch(
+        name=f'PRED_{start.year}_{end.year}',
+        start=start,
+        end=end,
+        source='prediction',
+        role='harmonic_prediction',
+        completion_fraction=frac,
+        n_expected=expected,
+        n_valid=valid_n,
+    )
+
+
 def select_epochs(df: pd.DataFrame, min_fraction: float = 0.75, min_months_recent: int = 6) -> List[Epoch]:
     df = clean_hourly_dataframe(df)
     epochs: List[Epoch] = []
@@ -515,7 +476,11 @@ def select_epochs(df: pd.DataFrame, min_fraction: float = 0.75, min_months_recen
             epochs.append(Epoch(name=name, start=start, end=end, source='primary', completion_fraction=frac, n_expected=expected, n_valid=valid_n))
 
     if epochs:
-        return epochs[:3]
+        if not any(has_minimum_annual_completion(df, e.start, e.end, min_fraction) for e in epochs):
+            pred_epoch = select_prediction_epoch(df, min_annual_fraction=min_fraction)
+            if pred_epoch is not None and pred_epoch.name not in {e.name for e in epochs}:
+                epochs.append(pred_epoch)
+        return epochs[:4]
 
     valid = df.dropna(subset=['sea_level'])
     if valid.empty:
@@ -833,11 +798,13 @@ def _attach_switch_levels(ds: xr.Dataset, epochs: List[Epoch], switch_levels: Sw
 
 
 def _attach_skill(ds: xr.Dataset) -> xr.Dataset:
-    skill_text = build_netcdf_skill_text()
-    ds['skill'] = xr.DataArray(np.array(skill_text, dtype=object))
-    ds.attrs['skill_format'] = 'open-skill-markdown'
-    ds.attrs['skill_name'] = 'uhslc-tidal-datums-predictions'
-    ds.attrs['skill_version'] = '1'
+    skill = get_netcdf_skill_reference()
+    ds.attrs['skill_format'] = skill.format
+    ds.attrs['skill_name'] = skill.name
+    ds.attrs['skill_description'] = skill.description
+    ds.attrs['skill_local_path'] = skill.local_path
+    ds.attrs['skill_remote_url'] = skill.remote_url
+    ds.attrs['skill_location'] = f'local: {skill.local_path}; remote: {skill.remote_url}'
     return ds
 
 
@@ -862,6 +829,7 @@ def build_datums_only_dataset(station_id: str, station_name: str, station_kind: 
     ds['epoch_end'] = xr.DataArray(np.array([np.datetime64(e.end, 'ns') for e in epochs]), dims=['epoch'])
     ds['epoch_completion_fraction'] = xr.DataArray(np.array([e.completion_fraction for e in epochs], dtype=float), dims=['epoch'])
     ds['epoch_source'] = xr.DataArray(np.array([e.source for e in epochs], dtype=object), dims=['epoch'])
+    ds['epoch_role'] = xr.DataArray(np.array([e.role for e in epochs], dtype=object), dims=['epoch'])
     ds['epoch_n_expected'] = xr.DataArray(np.array([e.n_expected for e in epochs], dtype=np.int32), dims=['epoch'])
     ds['epoch_n_valid'] = xr.DataArray(np.array([e.n_valid for e in epochs], dtype=np.int32), dims=['epoch'])
     ds = _attach_switch_levels(ds, epochs, switch_levels)
@@ -898,6 +866,10 @@ def build_netcdf_dataset(station_id: str, station_name: str, station_kind: str, 
     ds['epoch_start'] = xr.DataArray(np.array([np.datetime64(e.start, 'ns') for e in epochs]), dims=['epoch'])
     ds['epoch_end'] = xr.DataArray(np.array([np.datetime64(e.end, 'ns') for e in epochs]), dims=['epoch'])
     ds['epoch_completion_fraction'] = xr.DataArray(np.array([e.completion_fraction for e in epochs], dtype=float), dims=['epoch'])
+    ds['epoch_source'] = xr.DataArray(np.array([e.source for e in epochs], dtype=object), dims=['epoch'])
+    ds['epoch_role'] = xr.DataArray(np.array([e.role for e in epochs], dtype=object), dims=['epoch'])
+    ds['epoch_n_expected'] = xr.DataArray(np.array([e.n_expected for e in epochs], dtype=np.int32), dims=['epoch'])
+    ds['epoch_n_valid'] = xr.DataArray(np.array([e.n_valid for e in epochs], dtype=np.int32), dims=['epoch'])
     ds['harmonic_constituent'] = xr.DataArray(const_arr, dims=['epoch', 'constituent_index'])
     ds['harmonic_amplitude_mm'] = xr.DataArray(_round_mm_array(amp_arr), dims=['epoch', 'constituent_index'])
     ds['harmonic_phase_deg'] = xr.DataArray(np.array(np.rint(phase_arr), dtype=np.int32), dims=['epoch', 'constituent_index'])
